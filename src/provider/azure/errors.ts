@@ -39,6 +39,11 @@ export const mapAzureError = (error: unknown, context: string): AppError => {
     case 400:
       return new AppError('bad_request', `${context}: ${azureMessage}`, { details, cause: error });
     case 401:
+      return new AppError(
+        'upstream_error',
+        `${context}: Azure rejected the connector's token (${azureMessage})`,
+        { details, cause: error, retryable: true },
+      );
     case 403:
       return new AppError(
         'forbidden',

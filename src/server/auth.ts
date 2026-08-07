@@ -24,19 +24,15 @@ const bearerToken = (request: FastifyRequest): string | undefined => {
   return undefined;
 };
 
-const constantTimeEquals = (a: string, b: string): boolean => {
-  const left = Buffer.from(a, 'utf8');
-  const right = Buffer.from(b, 'utf8');
-  if (left.length !== right.length) {
-    // Still perform a comparison to keep the timing profile flat.
-    timingSafeEqual(left, left);
-    return false;
-  }
-  return timingSafeEqual(left, right);
-};
+const sha256 = (value: string): Buffer => createHash('sha256').update(value, 'utf8').digest();
 
-const fingerprint = (value: string): string =>
-  createHash('sha256').update(value).digest('hex').slice(0, 12);
+/**
+ * Compares two secrets without leaking their contents or their lengths: both sides are reduced to
+ * a fixed-width digest first, so the work performed is independent of the presented value.
+ */
+const constantTimeEquals = (a: string, b: string): boolean => timingSafeEqual(sha256(a), sha256(b));
+
+const fingerprint = (value: string): string => sha256(value).toString('hex').slice(0, 12);
 
 class DisabledAuthenticator implements Authenticator {
   public authenticate(): Promise<Principal> {

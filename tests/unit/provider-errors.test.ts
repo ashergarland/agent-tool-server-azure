@@ -12,6 +12,7 @@ import { webAppId } from '../helpers/fake-provider.js';
 describe('mapAzureError', () => {
   it.each([
     [403, 'forbidden'],
+    [401, 'upstream_error'],
     [404, 'not_found'],
     [409, 'conflict'],
     [429, 'rate_limited'],

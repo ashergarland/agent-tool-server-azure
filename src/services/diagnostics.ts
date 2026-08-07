@@ -103,7 +103,9 @@ export class DiagnosticsService {
       '| extend targetResourceId = tolower(tostring(properties.targetResourceId))',
       '| extend availabilityState = tostring(properties.availabilityState)',
       '| extend summary = tostring(properties.summary)',
-      '| extend reportedTime = tostring(properties.occuredTime)',
+      // Resource Health exposes this as `occurredTime`; older payloads carry the misspelled
+      // `occuredTime`, so accept either rather than silently reporting an empty timestamp.
+      '| extend reportedTime = tostring(coalesce(properties.occurredTime, properties.occuredTime))',
       "| where availabilityState !~ 'Available'",
     ];
     if (input.resourceGroup) {
