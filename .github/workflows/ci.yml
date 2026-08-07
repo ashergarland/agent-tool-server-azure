@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  verify:
+    name: Lint, typecheck and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test:coverage
+
+      - name: Build
+        run: npm run build
+
+      - name: Emit OpenAPI document
+        run: npm run openapi:emit -- openapi.json
+
+      - name: Upload OpenAPI document
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi
+          path: openapi.json
+
+  docker:
+    name: Build container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: chatgpt-azure:ci
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      - name: Smoke test the image
+        env:
+          API_KEY: ci-smoke-test-key-that-is-long-enough
+        run: |
+          docker run -d --name connector -p 8080:8080 \
+            -e API_KEYS="$API_KEY" \
+            chatgpt-azure:ci
+          for _ in $(seq 1 20); do
+            if curl -fsS http://localhost:8080/health > /dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/health
+          curl -fsS http://localhost:8080/version
+          curl -fsS -H "x-api-key: $API_KEY" http://localhost:8080/tools > /dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/tools)" = "401"
+          docker rm -f connector
+
+  infra:
+    name: Validate Bicep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Bicep templates
+        run: |
+          az bicep install
+          az bicep build --file infra/main.bicep --stdout > /dev/null
+
+      - name: Lint Bicep templates
+        run: |
+          for template in infra/main.bicep infra/modules/*.bicep; do
+            echo "Linting $template"
+            az bicep lint --file "$template"
+          done

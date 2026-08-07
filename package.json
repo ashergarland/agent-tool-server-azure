@@ -26,7 +26,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "http://localhost:26831/ashergarland/chatgpt-azure"
+    "url": "git+https://github.com/ashergarland/chatgpt-azure.git"
   },
   "dependencies": {
     "@azure/arm-appservice": "^19.0.0",
