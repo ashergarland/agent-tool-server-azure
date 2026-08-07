@@ -48,7 +48,9 @@ const resourceId = z
   .string()
   .min(1)
   .max(1024)
-  .describe('Fully qualified ARM resource id, e.g. /subscriptions/.../providers/Microsoft.Web/sites/app');
+  .describe(
+    'Fully qualified ARM resource id, e.g. /subscriptions/.../providers/Microsoft.Web/sites/app',
+  );
 
 const resourceGroup = z.string().min(1).max(90).describe('Resource group name.');
 
@@ -226,7 +228,7 @@ export const runGraphQueryTool = defineTool({
       .string()
       .min(1)
       .max(8000)
-      .describe("Resource Graph KQL, e.g. \"Resources | summarize count() by type\"."),
+      .describe('Resource Graph KQL, e.g. "Resources | summarize count() by type".'),
     limit,
     skipToken,
   }),
@@ -321,9 +323,7 @@ export const getMetricsTool = defineTool({
         name: z.string(),
         unit: z.string().optional(),
         aggregation: z.string(),
-        dataPoints: z.array(
-          z.object({ timestamp: z.string(), value: z.number().optional() }),
-        ),
+        dataPoints: z.array(z.object({ timestamp: z.string(), value: z.number().optional() })),
       }),
     ),
   }),

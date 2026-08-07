@@ -1,4 +1,9 @@
-import type { AzureProvider, AzureResource, ResourceGroup, Subscription } from '../provider/types.js';
+import type {
+  AzureProvider,
+  AzureResource,
+  ResourceGroup,
+  Subscription,
+} from '../provider/types.js';
 import { escapeKqlString } from '../provider/azure/index.js';
 import type { Guardrails } from './guardrails.js';
 

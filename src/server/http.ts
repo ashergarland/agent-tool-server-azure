@@ -108,45 +108,42 @@ export const createHttpServer = (deps: HttpServerDeps): HttpServer => {
     })),
   }));
 
-  app.post<{ Params: { toolName: string }; Body: unknown }>(
-    '/tools/:toolName',
-    async (request) => {
-      const { toolName } = request.params;
-      const principal = request.principal ?? { id: 'anonymous', kind: 'anonymous' as const };
-      const tool = registry.get(toolName);
-      const startedAtMs = Date.now();
+  app.post<{ Params: { toolName: string }; Body: unknown }>('/tools/:toolName', async (request) => {
+    const { toolName } = request.params;
+    const principal = request.principal ?? { id: 'anonymous', kind: 'anonymous' as const };
+    const tool = registry.get(toolName);
+    const startedAtMs = Date.now();
 
-      request.log.info(
-        { event: 'tool.invoke', tool: toolName, kind: tool.kind, principal: principal.id },
-        'tool invocation started',
-      );
+    request.log.info(
+      { event: 'tool.invoke', tool: toolName, kind: tool.kind, principal: principal.id },
+      'tool invocation started',
+    );
 
-      const body = request.body;
-      const input =
-        body === undefined || body === null
-          ? {}
-          : typeof body === 'object' && 'input' in (body as Record<string, unknown>)
-            ? (body as { input: unknown }).input
-            : body;
+    const body = request.body;
+    const input =
+      body === undefined || body === null
+        ? {}
+        : typeof body === 'object' && 'input' in (body as Record<string, unknown>)
+          ? (body as { input: unknown }).input
+          : body;
 
-      const result = await tool.invoke(input, services, {
-        requestId: request.id,
+    const result = await tool.invoke(input, services, {
+      requestId: request.id,
+      principal: principal.id,
+    });
+
+    request.log.info(
+      {
+        event: 'tool.result',
+        tool: toolName,
         principal: principal.id,
-      });
+        durationMs: Date.now() - startedAtMs,
+      },
+      'tool invocation succeeded',
+    );
 
-      request.log.info(
-        {
-          event: 'tool.result',
-          tool: toolName,
-          principal: principal.id,
-          durationMs: Date.now() - startedAtMs,
-        },
-        'tool invocation succeeded',
-      );
-
-      return { tool: toolName, requestId: request.id, result };
-    },
-  );
+    return { tool: toolName, requestId: request.id, result };
+  });
 
   return app;
 };

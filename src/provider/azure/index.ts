@@ -227,9 +227,7 @@ export class AzureSdkProvider implements AzureProvider {
     }
   }
 
-  public async listActivityLog(
-    input: ActivityLogQueryInput,
-  ): Promise<readonly ActivityLogEntry[]> {
+  public async listActivityLog(input: ActivityLogQueryInput): Promise<readonly ActivityLogEntry[]> {
     const filters = [
       `eventTimestamp ge '${input.since.toISOString()}'`,
       `eventTimestamp le '${input.until.toISOString()}'`,
@@ -325,7 +323,10 @@ export class AzureSdkProvider implements AzureProvider {
   ): Promise<AzureResource> {
     const subscriptionId = subscriptionIdFromResourceId(resourceId);
     if (!subscriptionId) {
-      throw new AppError('bad_request', `Resource id is missing a subscription segment: ${resourceId}`);
+      throw new AppError(
+        'bad_request',
+        `Resource id is missing a subscription segment: ${resourceId}`,
+      );
     }
 
     try {
@@ -343,7 +344,8 @@ export class AzureSdkProvider implements AzureProvider {
 }
 
 /** Escape a value that will be embedded inside a single-quoted KQL string literal. */
-export const escapeKqlString = (value: string): string => value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+export const escapeKqlString = (value: string): string =>
+  value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
 export const createAzureProvider = (config: AppConfig): AzureProvider =>
   new AzureSdkProvider(createAzureCredential(config), config);

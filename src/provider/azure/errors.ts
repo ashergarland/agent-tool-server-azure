@@ -9,7 +9,7 @@ interface RestErrorish {
 }
 
 const asRestError = (error: unknown): RestErrorish =>
-  typeof error === 'object' && error !== null ? (error as RestErrorish) : {};
+  typeof error === 'object' && error !== null ? error : {};
 
 /**
  * Translate Azure SDK / ARM failures into the connector's transport-agnostic error taxonomy.

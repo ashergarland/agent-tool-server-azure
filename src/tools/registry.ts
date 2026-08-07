@@ -21,24 +21,14 @@ export interface RegisteredTool {
   readonly outputSchema: z.ZodType;
   readonly inputJsonSchema: Record<string, unknown>;
   readonly outputJsonSchema: Record<string, unknown>;
-  invoke(
-    rawInput: unknown,
-    services: Services,
-    context: ToolInvocationContext,
-  ): Promise<unknown>;
+  invoke(rawInput: unknown, services: Services, context: ToolInvocationContext): Promise<unknown>;
 }
 
 const toJsonSchema = (schema: z.ZodType): Record<string, unknown> =>
-  z.toJSONSchema(schema, { io: 'input', target: 'draft-7', unrepresentable: 'any' }) as Record<
-    string,
-    unknown
-  >;
+  z.toJSONSchema(schema, { io: 'input', target: 'draft-7', unrepresentable: 'any' });
 
 const toOutputJsonSchema = (schema: z.ZodType): Record<string, unknown> =>
-  z.toJSONSchema(schema, { io: 'output', target: 'draft-7', unrepresentable: 'any' }) as Record<
-    string,
-    unknown
-  >;
+  z.toJSONSchema(schema, { io: 'output', target: 'draft-7', unrepresentable: 'any' });
 
 const erase = (definition: ToolDefinition): RegisteredTool => ({
   name: definition.name,

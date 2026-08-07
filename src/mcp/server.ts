@@ -6,7 +6,7 @@ import type { Services } from '../services/index.js';
 import type { ToolRegistry } from '../tools/registry.js';
 
 const shapeOf = (schema: z.ZodType): z.ZodRawShape =>
-  schema instanceof z.ZodObject ? (schema.shape as z.ZodRawShape) : {};
+  schema instanceof z.ZodObject ? schema.shape : {};
 
 /**
  * MCP transport over the exact same tool registry that backs the HTTP surface. No Azure logic is

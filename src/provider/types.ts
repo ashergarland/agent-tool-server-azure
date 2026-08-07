@@ -103,5 +103,8 @@ export interface AzureProvider {
   restartVirtualMachine(ref: ResourceRef): Promise<void>;
   startVirtualMachine(ref: ResourceRef): Promise<void>;
   restartWebApp(ref: ResourceRef): Promise<void>;
-  setResourceTags(resourceId: string, tags: Readonly<Record<string, string>>): Promise<AzureResource>;
+  setResourceTags(
+    resourceId: string,
+    tags: Readonly<Record<string, string>>,
+  ): Promise<AzureResource>;
 }

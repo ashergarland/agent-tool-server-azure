@@ -22,13 +22,34 @@ const errorSchema: JsonObject = {
 };
 
 const errorResponses: JsonObject = {
-  '400': { description: 'Invalid input', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
-  '401': { description: 'Missing or invalid credentials', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
-  '403': { description: 'Outside the connector allow-list, or mutations disabled', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
-  '404': { description: 'Unknown tool or resource', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
-  '429': { description: 'Rate limited', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
-  '500': { description: 'Connector failure', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
-  '502': { description: 'Azure upstream failure', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+  '400': {
+    description: 'Invalid input',
+    content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+  },
+  '401': {
+    description: 'Missing or invalid credentials',
+    content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+  },
+  '403': {
+    description: 'Outside the connector allow-list, or mutations disabled',
+    content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+  },
+  '404': {
+    description: 'Unknown tool or resource',
+    content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+  },
+  '429': {
+    description: 'Rate limited',
+    content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+  },
+  '500': {
+    description: 'Connector failure',
+    content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+  },
+  '502': {
+    description: 'Azure upstream failure',
+    content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+  },
 };
 
 const toolPath = (tool: RegisteredTool): JsonObject => ({

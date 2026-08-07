@@ -103,7 +103,9 @@ const buildAuthConfig = (env: Env): AppConfig['auth'] => {
   switch (env.AUTH_MODE) {
     case 'disabled':
       if (env.NODE_ENV === 'production') {
-        throw new ConfigurationError('AUTH_MODE=disabled is not permitted when NODE_ENV=production');
+        throw new ConfigurationError(
+          'AUTH_MODE=disabled is not permitted when NODE_ENV=production',
+        );
       }
       return { mode: 'disabled' };
     case 'api-key':
