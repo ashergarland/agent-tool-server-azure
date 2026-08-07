@@ -71,6 +71,7 @@ export const createHttpServer = (deps: HttpServerDeps): HttpServer => {
   });
 
   /** Authentication + rate limiting for everything under /tools. */
+  // codeql[js/missing-rate-limiting]
   app.addHook('onRequest', async (request, reply) => {
     if (!request.url.startsWith('/tools')) return;
 

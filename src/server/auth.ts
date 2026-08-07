@@ -31,6 +31,15 @@ const bearerToken = (request: FastifyRequest): string | undefined => {
  */
 const CREDENTIAL_HMAC_KEY = randomBytes(32);
 
+/**
+ * Derives the fixed-width comparison value for a credential.
+ *
+ * This is not password storage: API keys are high-entropy machine credentials that are never
+ * persisted by this service, and the HMAC key is random per process. A deliberately slow KDF is
+ * therefore inappropriate here — it would add no security while turning every unauthenticated
+ * request into a CPU denial-of-service lever.
+ */
+// codeql[js/insufficient-password-hash]
 const digest = (value: string): Buffer =>
   createHmac('sha256', CREDENTIAL_HMAC_KEY).update(value, 'utf8').digest();
 
