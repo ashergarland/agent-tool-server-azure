@@ -1,4 +1,4 @@
-import { timingSafeEqual, createHash } from 'node:crypto';
+import { timingSafeEqual, createHmac, randomBytes } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import type { FastifyRequest } from 'fastify';
 import type { AppConfig } from '../config/index.js';
@@ -24,15 +24,25 @@ const bearerToken = (request: FastifyRequest): string | undefined => {
   return undefined;
 };
 
-const sha256 = (value: string): Buffer => createHash('sha256').update(value, 'utf8').digest();
+/**
+ * Per-process key used to derive fixed-width, non-reversible representations of bearer
+ * credentials. Regenerated on every start so digests are never comparable across processes and
+ * cannot be brute-forced offline if they leak through logs.
+ */
+const CREDENTIAL_HMAC_KEY = randomBytes(32);
+
+const digest = (value: string): Buffer =>
+  createHmac('sha256', CREDENTIAL_HMAC_KEY).update(value, 'utf8').digest();
 
 /**
- * Compares two secrets without leaking their contents or their lengths: both sides are reduced to
- * a fixed-width digest first, so the work performed is independent of the presented value.
+ * Compares two credentials without leaking their contents or their lengths: both sides are
+ * reduced to a fixed-width keyed digest first, so the work performed and the bytes compared are
+ * independent of the presented value.
  */
-const constantTimeEquals = (a: string, b: string): boolean => timingSafeEqual(sha256(a), sha256(b));
+const constantTimeEquals = (a: string, b: string): boolean => timingSafeEqual(digest(a), digest(b));
 
-const fingerprint = (value: string): string => sha256(value).toString('hex').slice(0, 12);
+/** Stable-per-process, non-reversible label for a credential, safe to put in logs. */
+const fingerprint = (value: string): string => digest(value).toString('hex').slice(0, 12);
 
 class DisabledAuthenticator implements Authenticator {
   public authenticate(): Promise<Principal> {

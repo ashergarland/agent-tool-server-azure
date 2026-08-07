@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import Fastify from 'fastify';
+import Fastify, { type FastifyReply } from 'fastify';
 import type { Logger } from 'pino';
 import type { AppConfig } from '../config/index.js';
 import { AppError } from '../errors.js';
@@ -8,7 +8,7 @@ import type { Services } from '../services/index.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import { createAuthenticator, type Principal } from './auth.js';
 import { registerErrorHandler } from './errors.js';
-import { FixedWindowRateLimiter } from './rate-limit.js';
+import { FixedWindowRateLimiter, type RateLimitDecision } from './rate-limit.js';
 import type { HttpServer } from './types.js';
 
 declare module 'fastify' {
@@ -49,6 +49,20 @@ export const createHttpServer = (deps: HttpServerDeps): HttpServer => {
     config.http.rateLimit.max,
     config.http.rateLimit.windowMs,
   );
+  /**
+   * Applied before authentication so that an unauthenticated flood cannot force the connector to
+   * perform an unbounded number of credential verifications. Deliberately more generous than the
+   * per-principal limit, since a single caller may legitimately sit behind one address.
+   */
+  const preAuthLimiter = new FixedWindowRateLimiter(
+    config.http.rateLimit.max > 0 ? config.http.rateLimit.max * 2 : 0,
+    config.http.rateLimit.windowMs,
+  );
+
+  const rateLimitExceeded = (reply: FastifyReply, decision: RateLimitDecision): AppError => {
+    void reply.header('retry-after', String(Math.ceil((decision.resetAtMs - Date.now()) / 1000)));
+    return new AppError('rate_limited', 'Too many requests; slow down and retry.');
+  };
 
   app.addHook('onSend', (request, reply, payload, done) => {
     void reply.header('x-request-id', request.id);
@@ -60,15 +74,15 @@ export const createHttpServer = (deps: HttpServerDeps): HttpServer => {
   app.addHook('onRequest', async (request, reply) => {
     if (!request.url.startsWith('/tools')) return;
 
+    const preAuth = preAuthLimiter.consume(`ip:${request.ip}`);
+    if (!preAuth.allowed) throw rateLimitExceeded(reply, preAuth);
+
     const principal = await authenticator.authenticate(request);
     request.principal = principal;
 
     const decision = limiter.consume(principal.id);
     void reply.header('x-ratelimit-remaining', String(decision.remaining));
-    if (!decision.allowed) {
-      void reply.header('retry-after', String(Math.ceil((decision.resetAtMs - Date.now()) / 1000)));
-      throw new AppError('rate_limited', 'Too many requests; slow down and retry.');
-    }
+    if (!decision.allowed) throw rateLimitExceeded(reply, decision);
   });
 
   registerErrorHandler(app);
