@@ -197,18 +197,25 @@ Analytics workspace, and a Container App running the connector with the identity
 
 ```bash
 # 1. Provision infrastructure and generate the connector API key
-./scripts/bootstrap/provision.sh <subscription-id> prod westeurope
+./scripts/bootstrap/provision.sh <subscription-id> prod westus2
 
 # 2. Build the image in ACR and redeploy the Container App
-./scripts/bootstrap/deploy.sh <subscription-id> prod westeurope
+./scripts/bootstrap/deploy.sh <subscription-id> prod westus2
 ```
+
+`provision.sh` deploys in two passes on purpose. The Container App mounts `connector-api-key`
+directly out of Key Vault, so it cannot be created before that secret exists; the first pass runs
+with `deployApp=false` to create the vault and the identity, the script writes the secret, and the
+second pass brings the app up. The script also grants the invoking user **Key Vault Secrets
+Officer** on the vault — the vault uses RBAC authorisation, so being subscription Owner does not
+by itself grant data-plane access to write the secret.
 
 To grant operator permissions, redeploy with `enableMutations=true` — this both assigns the
 operator roles and flips `MUTATIONS_ENABLED` in the Container App:
 
 ```bash
 az deployment sub create \
-  --location westeurope \
+  --location westus2 \
   --template-file infra/main.bicep \
   --parameters infra/parameters/prod.parameters.json enableMutations=true
 ```
@@ -219,6 +226,10 @@ az deployment sub create \
    (`az keyvault secret show --vault-name <kv> --name connector-api-key --query value -o tsv`).
 2. Point ChatGPT at `https://<connector-host>/openapi.json`.
 3. Configure authentication as a bearer token using that key.
+
+The four state-changing operations are marked `x-openai-isConsequential: true`, so ChatGPT will
+prompt for confirmation before invoking them. They additionally refuse to run unless the
+deployment set `enableMutations=true`.
 
 ---
 

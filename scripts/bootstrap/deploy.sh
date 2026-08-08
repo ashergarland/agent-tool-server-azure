@@ -27,12 +27,14 @@ if [[ -z "${REGISTRY_NAME}" ]]; then
 fi
 REGISTRY_SERVER="$(az acr show --name "${REGISTRY_NAME}" --query loginServer --output tsv)"
 IMAGE="${REGISTRY_SERVER}/chatgpt-azure:${TAG}"
+VERSION="$(node -p "require('${REPO_ROOT}/package.json').version")"
 
 echo "==> Building ${IMAGE} in ACR"
 az acr build \
   --registry "${REGISTRY_NAME}" \
   --image "chatgpt-azure:${TAG}" \
   --build-arg "GIT_SHA=${TAG}" \
+  --build-arg "SERVICE_VERSION=${VERSION}" \
   --file "${REPO_ROOT}/Dockerfile" \
   "${REPO_ROOT}" \
   --output none
