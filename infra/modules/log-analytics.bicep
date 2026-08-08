@@ -12,6 +12,10 @@ param tags object = {}
 @maxValue(730)
 param retentionInDays int = 30
 
+@description('Hard ceiling on daily log ingestion, in GB. Log Analytics bills per GB ingested, so a stuck retry loop writing errors could otherwise run up a bill unattended. Capping it means logging degrades instead of spending.')
+@minValue(1)
+param dailyQuotaGb int = 1
+
 resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: name
   location: location
@@ -21,6 +25,9 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
       name: 'PerGB2018'
     }
     retentionInDays: retentionInDays
+    workspaceCapping: {
+      dailyQuotaGb: dailyQuotaGb
+    }
     features: {
       enableLogAccessUsingOnlyResourcePermissions: true
     }

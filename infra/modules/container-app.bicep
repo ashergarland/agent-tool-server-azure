@@ -47,9 +47,9 @@ param mutationConfirmationRequired bool = true
 @allowed(['fatal', 'error', 'warn', 'info', 'debug', 'trace'])
 param logLevel string = 'info'
 
-@description('Minimum number of replicas.')
+@description('Minimum number of replicas. Zero lets the app scale to nothing when idle, which is what makes a low-traffic connector nearly free to run: Container Apps bills per second of running replica, so a permanently warm replica costs money around the clock whether or not anyone calls it. The trade is a cold start of a few seconds on the first request after an idle period.')
 @minValue(0)
-param minReplicas int = 1
+param minReplicas int = 0
 
 @description('Maximum number of replicas.')
 @minValue(1)
@@ -127,8 +127,11 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'connector'
           image: image
           resources: {
-            cpu: json('0.5')
-            memory: '1Gi'
+            // Smallest supported CPU/memory pair. The connector is I/O bound - it waits on Azure
+            // Resource Manager rather than computing - so cutting the allocation halves the
+            // per-second cost without changing how fast a request returns.
+            cpu: json('0.25')
+            memory: '0.5Gi'
           }
           env: concat(
             [
