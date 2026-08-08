@@ -98,7 +98,10 @@ cat <<SUMMARY
   Identity client id    ${IDENTITY_CLIENT_ID}
   Connector URL         ${CONNECTOR_URL}
 
-The app is currently running the placeholder image.
+The app is currently running the placeholder image, and because the ingress hostname does not
+exist until the app is created, PUBLIC_BASE_URL is not set yet — the OpenAPI document will
+advertise localhost until you run deploy.sh, which supplies the real hostname. Do not register
+the connector in ChatGPT before then.
 
 Next steps:
   1. Build and push the real image:
