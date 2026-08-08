@@ -39,6 +39,26 @@ describe('config', () => {
     expect(config.guardrails.confirmationRequired).toBe(false);
   });
 
+  // Bicep's string(bool) emits "True"/"False", which previously failed startup validation and
+  // left the Container App unable to boot.
+  it.each([
+    ['True', true],
+    ['False', false],
+    ['TRUE', true],
+    [' true ', true],
+    ['Yes', true],
+    ['No', false],
+    ['On', true],
+    ['Off', false],
+  ])('accepts %s as a boolean flag regardless of casing or padding', (input, expected) => {
+    const config = buildConfig(envSchema.parse({ ...baseEnv, MUTATIONS_ENABLED: input }));
+    expect(config.guardrails.mutationsEnabled).toBe(expected);
+  });
+
+  it('rejects a boolean flag that is not boolean-ish', () => {
+    expect(() => envSchema.parse({ ...baseEnv, MUTATIONS_ENABLED: 'maybe' })).toThrow();
+  });
+
   it('rejects disabled auth in production', () => {
     expect(() =>
       buildConfig(envSchema.parse({ NODE_ENV: 'production', AUTH_MODE: 'disabled' })),
