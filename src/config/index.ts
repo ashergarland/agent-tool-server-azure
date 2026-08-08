@@ -31,6 +31,21 @@ const booleanish = z
   .transform((value) => (typeof value === 'boolean' ? value : TRUTHY.has(value)));
 
 /**
+ * Drops variables whose value is blank so an empty string means "not set" rather than "set to
+ * something invalid".
+ *
+ * Deployment platforms routinely materialise an unset value as an empty string: the Container App
+ * template always declares `PUBLIC_BASE_URL`, and the provisioning pass that first creates the app
+ * has no public URL to supply yet because the ingress hostname does not exist until the app does.
+ * Without this, `z.url()` would reject that empty string and the container would exit at startup
+ * instead of falling back to its default.
+ */
+export const withoutBlankValues = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
+  Object.fromEntries(
+    Object.entries(source).filter(([, value]) => value === undefined || value.trim() !== ''),
+  );
+
+/**
  * Environment contract for the connector. Everything the process needs is declared here so that
  * a misconfigured deployment fails fast at startup instead of at the first Azure call.
  */
@@ -175,7 +190,7 @@ export const buildConfig = (env: Env): AppConfig => ({
 });
 
 export const loadConfig = (source: NodeJS.ProcessEnv = process.env): AppConfig => {
-  const parsed = envSchema.safeParse(source);
+  const parsed = envSchema.safeParse(withoutBlankValues(source));
   if (!parsed.success) {
     const details = parsed.error.issues
       .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)

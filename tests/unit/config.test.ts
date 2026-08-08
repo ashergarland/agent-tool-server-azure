@@ -59,6 +59,40 @@ describe('config', () => {
     expect(() => envSchema.parse({ ...baseEnv, MUTATIONS_ENABLED: 'maybe' })).toThrow();
   });
 
+  // The Container App template used to declare PUBLIC_BASE_URL unconditionally, and the
+  // deployment that first creates the ingress has no hostname to supply. An empty string reached
+  // z.url() and the container exited at startup.
+  it('treats a blank optional variable as unset rather than invalid', () => {
+    const config = loadConfig({ ...baseEnv, PUBLIC_BASE_URL: '' });
+    expect(config.service.publicBaseUrl).toBeUndefined();
+  });
+
+  it('still rejects a non-empty but malformed optional variable', () => {
+    expect(() => loadConfig({ ...baseEnv, PUBLIC_BASE_URL: 'not-a-url' })).toThrow(
+      ConfigurationError,
+    );
+  });
+
+  it('loads the exact environment the Container App template produces', () => {
+    const config = loadConfig({
+      NODE_ENV: 'production',
+      PORT: '8080',
+      LOG_LEVEL: 'info',
+      SERVICE_NAME: 'ca-chatgpt-azure-prod',
+      AUTH_MODE: 'api-key',
+      API_KEYS: '0123456789abcdef0123456789abcdef0123456789abcdef',
+      AZURE_CLIENT_ID: '4c9809f5-7445-4422-8c48-c5cc90c7056d',
+      AZURE_SUBSCRIPTION_IDS: 'cba25415-5503-42cc-8dde-1cbb92e687af',
+      AZURE_ALLOWED_RESOURCE_GROUPS: '',
+      MUTATIONS_ENABLED: 'False',
+      MUTATION_CONFIRMATION_REQUIRED: 'True',
+    });
+    expect(config.guardrails.mutationsEnabled).toBe(false);
+    expect(config.guardrails.confirmationRequired).toBe(true);
+    expect(config.azure.allowedResourceGroups).toEqual([]);
+    expect(config.azure.allowedSubscriptionIds).toEqual(['cba25415-5503-42cc-8dde-1cbb92e687af']);
+  });
+
   it('rejects disabled auth in production', () => {
     expect(() =>
       buildConfig(envSchema.parse({ NODE_ENV: 'production', AUTH_MODE: 'disabled' })),
