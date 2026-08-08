@@ -50,6 +50,18 @@ bootstrap script writes the secret, and the second pass brings the app up.
 ''')
 param deployApp bool = true
 
+@description('Deploy an availability test and alert that notify when the connector stops answering /health. Requires alertEmail or alertSmsPhone to be set, otherwise the alert would have nowhere to fire.')
+param enableHealthAlerts bool = false
+
+@description('Email address notified when the connector goes down.')
+param alertEmail string = ''
+
+@description('Phone number notified by SMS when the connector goes down, digits only.')
+param alertSmsPhone string = ''
+
+@description('Country code for the SMS number, e.g. 1 for the United States.')
+param alertSmsCountryCode string = '1'
+
 // Built-in role definition ids.
 // Reader: read-only access to every resource in scope.
 var readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
@@ -150,6 +162,24 @@ module containerApp 'modules/container-app.bicep' = if (deployApp) {
     mutationsEnabled: enableMutations
     mutationConfirmationRequired: mutationConfirmationRequired
     logLevel: logLevel
+  }
+}
+
+// Availability monitoring is opt-in: it only makes sense once the app exists and an owner has
+// said where to send alerts. Deploying it with no receivers would create an alert that fires
+// into nothing, which is worse than no alert because it looks like coverage.
+module monitoring 'modules/monitoring.bicep' = if (deployApp && enableHealthAlerts) {
+  name: 'monitoring'
+  scope: connectorResourceGroup
+  params: {
+    name: 'chatgpt-azure-${environmentName}'
+    location: location
+    tags: defaultTags
+    connectorUrl: 'https://${containerApp!.outputs.fqdn}'
+    logAnalyticsWorkspaceId: logAnalytics.outputs.id
+    alertEmail: alertEmail
+    alertSmsPhone: alertSmsPhone
+    alertSmsCountryCode: alertSmsCountryCode
   }
 }
 

@@ -21,6 +21,51 @@ const errorSchema: JsonObject = {
   },
 };
 
+const versionSchema: JsonObject = {
+  type: 'object',
+  required: ['service', 'version', 'node', 'environment', 'capabilities'],
+  properties: {
+    service: { type: 'string' },
+    version: { type: 'string' },
+    gitSha: { type: 'string' },
+    node: { type: 'string' },
+    environment: { type: 'string' },
+    capabilities: {
+      type: 'object',
+      required: ['mutationsEnabled', 'confirmationRequired', 'authMode', 'scopedSubscriptions'],
+      properties: {
+        mutationsEnabled: { type: 'boolean' },
+        confirmationRequired: { type: 'boolean' },
+        authMode: { type: 'string' },
+        scopedSubscriptions: { type: 'integer' },
+      },
+    },
+  },
+};
+
+const toolCatalogueSchema: JsonObject = {
+  type: 'object',
+  required: ['tools'],
+  properties: {
+    tools: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['name', 'title', 'summary', 'description', 'kind'],
+        properties: {
+          name: { type: 'string' },
+          title: { type: 'string' },
+          summary: { type: 'string' },
+          description: { type: 'string' },
+          kind: { type: 'string' },
+          inputSchema: { type: 'object', additionalProperties: true },
+          outputSchema: { type: 'object', additionalProperties: true },
+        },
+      },
+    },
+  },
+};
+
 const errorResponses: JsonObject = {
   '400': {
     description: 'Invalid input',
@@ -128,7 +173,7 @@ export const buildOpenApiDocument = (config: AppConfig, registry: ToolRegistry):
         responses: {
           '200': {
             description: 'Version and capability metadata',
-            content: { 'application/json': { schema: { type: 'object' } } },
+            content: { 'application/json': { schema: versionSchema } },
           },
         },
       },
@@ -140,7 +185,7 @@ export const buildOpenApiDocument = (config: AppConfig, registry: ToolRegistry):
         responses: {
           '200': {
             description: 'Tool catalogue',
-            content: { 'application/json': { schema: { type: 'object' } } },
+            content: { 'application/json': { schema: toolCatalogueSchema } },
           },
           ...errorResponses,
         },

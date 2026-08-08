@@ -82,7 +82,7 @@ describe('config', () => {
       AUTH_MODE: 'api-key',
       API_KEYS: '0123456789abcdef0123456789abcdef0123456789abcdef',
       AZURE_CLIENT_ID: '4c9809f5-7445-4422-8c48-c5cc90c7056d',
-      AZURE_SUBSCRIPTION_IDS: 'cba25415-5503-42cc-8dde-1cbb92e687af',
+      AZURE_SUBSCRIPTION_IDS: '00000000-0000-0000-0000-000000000001',
       AZURE_ALLOWED_RESOURCE_GROUPS: '',
       MUTATIONS_ENABLED: 'False',
       MUTATION_CONFIRMATION_REQUIRED: 'True',
@@ -90,7 +90,7 @@ describe('config', () => {
     expect(config.guardrails.mutationsEnabled).toBe(false);
     expect(config.guardrails.confirmationRequired).toBe(true);
     expect(config.azure.allowedResourceGroups).toEqual([]);
-    expect(config.azure.allowedSubscriptionIds).toEqual(['cba25415-5503-42cc-8dde-1cbb92e687af']);
+    expect(config.azure.allowedSubscriptionIds).toEqual(['00000000-0000-0000-0000-000000000001']);
   });
 
   it('rejects disabled auth in production', () => {
