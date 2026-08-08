@@ -55,6 +55,12 @@ param minReplicas int = 1
 @minValue(1)
 param maxReplicas int = 3
 
+// Optional settings are omitted entirely rather than declared as empty strings. An absent
+// PUBLIC_BASE_URL means "not configured", not "configured to nothing", and the connector
+// validates its environment strictly at startup — an empty string fails `z.url()` and the
+// container exits. The app deployment that first creates the ingress has no hostname to supply.
+var optionalEnv = empty(publicBaseUrl) ? [] : [{ name: 'PUBLIC_BASE_URL', value: publicBaseUrl }]
+
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
   name: last(split(logAnalyticsWorkspaceId, '/'))
 }
@@ -124,20 +130,25 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json('0.5')
             memory: '1Gi'
           }
-          env: [
-            { name: 'NODE_ENV', value: 'production' }
-            { name: 'PORT', value: '8080' }
-            { name: 'LOG_LEVEL', value: logLevel }
-            { name: 'SERVICE_NAME', value: appName }
-            { name: 'PUBLIC_BASE_URL', value: publicBaseUrl }
-            { name: 'AUTH_MODE', value: 'api-key' }
-            { name: 'API_KEYS', secretRef: 'connector-api-key' }
-            { name: 'AZURE_CLIENT_ID', value: identityClientId }
-            { name: 'AZURE_SUBSCRIPTION_IDS', value: allowedSubscriptionIds }
-            { name: 'AZURE_ALLOWED_RESOURCE_GROUPS', value: allowedResourceGroups }
-            { name: 'MUTATIONS_ENABLED', value: toLower(string(mutationsEnabled)) }
-            { name: 'MUTATION_CONFIRMATION_REQUIRED', value: toLower(string(mutationConfirmationRequired)) }
-          ]
+          env: concat(
+            [
+              { name: 'NODE_ENV', value: 'production' }
+              { name: 'PORT', value: '8080' }
+              { name: 'LOG_LEVEL', value: logLevel }
+              { name: 'SERVICE_NAME', value: appName }
+              { name: 'AUTH_MODE', value: 'api-key' }
+              { name: 'API_KEYS', secretRef: 'connector-api-key' }
+              { name: 'AZURE_CLIENT_ID', value: identityClientId }
+              { name: 'AZURE_SUBSCRIPTION_IDS', value: allowedSubscriptionIds }
+              { name: 'AZURE_ALLOWED_RESOURCE_GROUPS', value: allowedResourceGroups }
+              { name: 'MUTATIONS_ENABLED', value: toLower(string(mutationsEnabled)) }
+              {
+                name: 'MUTATION_CONFIRMATION_REQUIRED'
+                value: toLower(string(mutationConfirmationRequired))
+              }
+            ],
+            optionalEnv
+          )
           probes: [
             {
               type: 'Liveness'

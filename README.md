@@ -210,6 +210,15 @@ second pass brings the app up. The script also grants the invoking user **Key Va
 Officer** on the vault — the vault uses RBAC authorisation, so being subscription Owner does not
 by itself grant data-plane access to write the secret.
 
+`PUBLIC_BASE_URL` is deliberately absent until `deploy.sh` runs: the ingress hostname does not
+exist until the app does. The connector starts fine without it, but the OpenAPI document then
+advertises `http://localhost:8080`, so **register the connector in ChatGPT only after `deploy.sh`**,
+which supplies the real hostname. Optional settings are omitted rather than passed as empty
+strings — an empty `PUBLIC_BASE_URL` would fail `z.url()` and crash-loop the container.
+
+> CI validates the templates with `az bicep build` and the linter, which check syntax and never
+> attempt a deployment. Green CI does not prove the templates deploy.
+
 To grant operator permissions, redeploy with `enableMutations=true` — this both assigns the
 operator roles and flips `MUTATIONS_ENABLED` in the Container App:
 
