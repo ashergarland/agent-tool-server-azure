@@ -135,8 +135,8 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'AZURE_CLIENT_ID', value: identityClientId }
             { name: 'AZURE_SUBSCRIPTION_IDS', value: allowedSubscriptionIds }
             { name: 'AZURE_ALLOWED_RESOURCE_GROUPS', value: allowedResourceGroups }
-            { name: 'MUTATIONS_ENABLED', value: string(mutationsEnabled) }
-            { name: 'MUTATION_CONFIRMATION_REQUIRED', value: string(mutationConfirmationRequired) }
+            { name: 'MUTATIONS_ENABLED', value: toLower(string(mutationsEnabled)) }
+            { name: 'MUTATION_CONFIRMATION_REQUIRED', value: toLower(string(mutationConfirmationRequired)) }
           ]
           probes: [
             {

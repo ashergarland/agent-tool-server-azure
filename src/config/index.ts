@@ -12,11 +12,23 @@ const csvList = z
   .pipe(z.array(z.string().min(1)))
   .catch([] as string[]);
 
+const TRUTHY = new Set(['true', '1', 'yes', 'on']);
+const FALSY = new Set(['false', '0', 'no', 'off']);
+
+// Environment variables arrive as strings from many producers, and casing is not consistent:
+// Bicep's `string(bool)` yields "True"/"False", shells yield "true"/"false". Normalise before
+// deciding, so a deployment never fails startup validation over capitalisation.
 const booleanish = z
-  .union([z.boolean(), z.enum(['true', 'false', '1', '0', 'yes', 'no'])])
-  .transform((value) =>
-    typeof value === 'boolean' ? value : value === 'true' || value === '1' || value === 'yes',
-  );
+  .union([
+    z.boolean(),
+    z
+      .string()
+      .transform((value) => value.trim().toLowerCase())
+      .refine((value) => TRUTHY.has(value) || FALSY.has(value), {
+        message: `Expected one of ${[...TRUTHY, ...FALSY].join(', ')} (case-insensitive)`,
+      }),
+  ])
+  .transform((value) => (typeof value === 'boolean' ? value : TRUTHY.has(value)));
 
 /**
  * Environment contract for the connector. Everything the process needs is declared here so that

@@ -43,6 +43,13 @@ param logLevel string = 'info'
 @description('Additional tags applied to every resource.')
 param tags object = {}
 
+@description('''
+Deploy the Container App. The app mounts the connector API key from Key Vault, so the very first
+provisioning pass must run with this set to false: it creates the vault and the identity, the
+bootstrap script writes the secret, and the second pass brings the app up.
+''')
+param deployApp bool = true
+
 // Built-in role definition ids.
 // Reader: read-only access to every resource in scope.
 var readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
@@ -123,7 +130,7 @@ module rbac 'modules/rbac.bicep' = {
   }
 }
 
-module containerApp 'modules/container-app.bicep' = {
+module containerApp 'modules/container-app.bicep' = if (deployApp) {
   name: 'container-app'
   scope: connectorResourceGroup
   params: {
@@ -151,5 +158,5 @@ output identityClientId string = identity.outputs.clientId
 output identityPrincipalId string = identity.outputs.principalId
 output registryLoginServer string = registry.outputs.loginServer
 output keyVaultName string = keyVault.outputs.name
-output connectorUrl string = 'https://${containerApp.outputs.fqdn}'
-output openApiUrl string = 'https://${containerApp.outputs.fqdn}/openapi.json'
+output connectorUrl string = deployApp ? 'https://${containerApp!.outputs.fqdn}' : ''
+output openApiUrl string = deployApp ? 'https://${containerApp!.outputs.fqdn}/openapi.json' : ''
