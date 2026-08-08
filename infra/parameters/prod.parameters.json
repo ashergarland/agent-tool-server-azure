@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": { "value": "prod" },
+    "location": { "value": "westeurope" },
+    "image": { "value": "REPLACE_WITH_ACR_LOGIN_SERVER/chatgpt-azure:REPLACE_WITH_TAG" },
+    "publicBaseUrl": { "value": "" },
+    "allowedSubscriptionIds": { "value": [] },
+    "allowedResourceGroups": { "value": [] },
+    "enableMutations": { "value": false },
+    "mutationConfirmationRequired": { "value": true },
+    "logLevel": { "value": "info" }
+  }
+}
