@@ -1,5 +1,5 @@
 {
-  "name": "chatgpt-azure",
+  "name": "agent-tool-server-azure",
   "version": "0.1.0",
   "description": "Backend connector that lets ChatGPT safely inspect, diagnose and operate an Azure environment.",
   "license": "MIT",
@@ -26,7 +26,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ashergarland/chatgpt-azure.git"
+    "url": "git+https://github.com/ashergarland/agent-tool-server-azure.git"
   },
   "dependencies": {
     "@azure/arm-appservice": "^19.0.0",

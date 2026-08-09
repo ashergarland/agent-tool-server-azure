@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for helping improve chatgpt-azure.
+Thank you for helping improve agent-tool-server-azure.
 
 ## Before you start
 
@@ -15,8 +15,8 @@ Thank you for helping improve chatgpt-azure.
 You need Node.js 22 or newer:
 
 ```bash
-git clone https://github.com/ashergarland/chatgpt-azure.git
-cd chatgpt-azure
+git clone https://github.com/ashergarland/agent-tool-server-azure.git
+cd agent-tool-server-azure
 npm ci
 cp .env.example .env
 npm test
@@ -47,7 +47,7 @@ npm run lint
 npm run typecheck
 npm run test:coverage
 npm run build
-npm run openapi:emit -- /tmp/chatgpt-azure-openapi.json
+npm run openapi:emit -- /tmp/agent-tool-server-azure-openapi.json
 ```
 
 If formatting fails, run `npm run format`, review the result, and repeat the checks. Infrastructure

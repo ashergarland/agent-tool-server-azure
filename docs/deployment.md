@@ -50,6 +50,13 @@ From the repository root:
 ./scripts/bootstrap/deploy.sh <subscription-id> [environment] [location]
 ```
 
+> [!WARNING]
+> The `agent-tool-server-azure` naming defaults are intended for new deployments. Azure resources
+> cannot be renamed in place. If you previously deployed this project under its `chatgpt-azure`
+> name, running the current bootstrap scripts creates a separate resource group and resources
+> rather than renaming the existing deployment. Preview the change, migrate state and credentials
+> deliberately, and remove the old resource group only after the new deployment is verified.
+
 The optional environment and location default to `prod` and `westeurope`. Environment names must
 be 2–10 characters and should contain only characters accepted by the generated Azure resource
 names.
@@ -69,8 +76,8 @@ localhost.
 The scripts print the app and vault names. You can also discover them from the environment name:
 
 ```bash
-RESOURCE_GROUP="rg-chatgpt-azure-prod"
-APP_NAME="ca-chatgpt-azure-prod"
+RESOURCE_GROUP="rg-agent-tool-server-azure-prod"
+APP_NAME="ca-agent-tool-server-prod"
 FQDN="$(az containerapp show \
   --resource-group "$RESOURCE_GROUP" \
   --name "$APP_NAME" \
@@ -242,7 +249,7 @@ Export any required logs first. Deleting the generated resource group removes th
 vault, and workspace:
 
 ```bash
-az group delete --name rg-chatgpt-azure-prod
+az group delete --name rg-agent-tool-server-azure-prod
 ```
 
 Review subscription-level role assignments after deletion and remove any orphaned assignments.

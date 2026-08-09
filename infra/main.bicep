@@ -1,7 +1,7 @@
 targetScope = 'subscription'
 
 metadata description = '''
-Deploys the chatgpt-azure connector: a user-assigned managed identity, a container registry,
+Deploys agent-tool-server-azure: a user-assigned managed identity, a container registry,
 a Key Vault holding the connector API key, a Log Analytics workspace, and a Container App that
 runs the connector image. The identity is granted read-only Azure RBAC by default; operator
 roles are only assigned when `enableMutations` is true.
@@ -16,7 +16,7 @@ param environmentName string = 'prod'
 param location string = deployment().location
 
 @description('Resource group that will hold the connector resources.')
-param resourceGroupName string = 'rg-chatgpt-azure-${environmentName}'
+param resourceGroupName string = 'rg-agent-tool-server-azure-${environmentName}'
 
 @description('Container image to run. Leave as the default placeholder for the first deployment, then redeploy with the real tag.')
 param image string = 'mcr.microsoft.com/k8se/quickstart:latest'
@@ -80,7 +80,7 @@ var assignedRoles = enableMutations ? concat(readRoles, writeRoles) : readRoles
 
 var suffix = uniqueString(subscription().id, resourceGroupName)
 var defaultTags = union(tags, {
-  workload: 'chatgpt-azure'
+  workload: 'agent-tool-server-azure'
   environment: environmentName
   managedBy: 'bicep'
 })
@@ -95,7 +95,7 @@ module identity 'modules/identity.bicep' = {
   name: 'identity'
   scope: connectorResourceGroup
   params: {
-    name: 'id-chatgpt-azure-${environmentName}'
+    name: 'id-agent-tool-server-azure-${environmentName}'
     location: location
     tags: defaultTags
   }
@@ -105,7 +105,7 @@ module registry 'modules/container-registry.bicep' = {
   name: 'registry'
   scope: connectorResourceGroup
   params: {
-    name: 'acrchatgptazure${suffix}'
+    name: 'acragenttoolserverazure${suffix}'
     location: location
     tags: defaultTags
     pullPrincipalId: identity.outputs.principalId
@@ -116,7 +116,7 @@ module keyVault 'modules/key-vault.bicep' = {
   name: 'key-vault'
   scope: connectorResourceGroup
   params: {
-    name: 'kv-cgaz-${suffix}'
+    name: 'kv-atsa-${suffix}'
     location: location
     tags: defaultTags
     readerPrincipalId: identity.outputs.principalId
@@ -127,7 +127,7 @@ module logAnalytics 'modules/log-analytics.bicep' = {
   name: 'log-analytics'
   scope: connectorResourceGroup
   params: {
-    name: 'log-chatgpt-azure-${environmentName}'
+    name: 'log-agent-tool-server-azure-${environmentName}'
     location: location
     tags: defaultTags
   }
@@ -146,8 +146,8 @@ module containerApp 'modules/container-app.bicep' = if (deployApp) {
   name: 'container-app'
   scope: connectorResourceGroup
   params: {
-    environmentName: 'cae-chatgpt-azure-${environmentName}'
-    appName: 'ca-chatgpt-azure-${environmentName}'
+    environmentName: 'cae-agent-tool-server-${environmentName}'
+    appName: 'ca-agent-tool-server-${environmentName}'
     location: location
     tags: defaultTags
     logAnalyticsWorkspaceId: logAnalytics.outputs.id
@@ -172,7 +172,7 @@ module monitoring 'modules/monitoring.bicep' = if (deployApp && enableHealthAler
   name: 'monitoring'
   scope: connectorResourceGroup
   params: {
-    name: 'chatgpt-azure-${environmentName}'
+    name: 'agent-tool-server-azure-${environmentName}'
     location: location
     tags: defaultTags
     connectorUrl: 'https://${containerApp!.outputs.fqdn}'

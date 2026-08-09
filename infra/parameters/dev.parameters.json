@@ -4,7 +4,7 @@
   "parameters": {
     "environmentName": { "value": "dev" },
     "location": { "value": "westeurope" },
-    "image": { "value": "REPLACE_WITH_ACR_LOGIN_SERVER/chatgpt-azure:REPLACE_WITH_TAG" },
+    "image": { "value": "REPLACE_WITH_ACR_LOGIN_SERVER/agent-tool-server-azure:REPLACE_WITH_TAG" },
     "publicBaseUrl": { "value": "" },
     "allowedSubscriptionIds": { "value": [] },
     "allowedResourceGroups": { "value": [] },

@@ -1,9 +1,9 @@
-# chatgpt-azure
+# agent-tool-server-azure
 
-[![CI](https://github.com/ashergarland/chatgpt-azure/actions/workflows/ci.yml/badge.svg)](https://github.com/ashergarland/chatgpt-azure/actions/workflows/ci.yml)
+[![CI](https://github.com/ashergarland/agent-tool-server-azure/actions/workflows/ci.yml/badge.svg)](https://github.com/ashergarland/agent-tool-server-azure/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A backend-only **ChatGPT connector for Azure**. It exposes a small, typed tool surface that lets
+A backend-only **agent tool server for Azure**. It exposes a small, typed tool surface that lets
 ChatGPT inspect, diagnose and perform a deliberately constrained set of operational actions
 against an Azure environment — authenticating to Azure with a managed identity, never with
 secrets in configuration.
@@ -32,7 +32,7 @@ same tool registry).
 ChatGPT
    │  authenticated tool request
    ▼
-chatgpt-azure  ── transport (HTTP/OpenAPI today, MCP over the same registry)
+agent-tool-server-azure  ── transport (HTTP/OpenAPI today, MCP over the same registry)
    │            ── tool registry (Zod-validated input/output)
    │            ── service layer (inventory / diagnostics / operations + guardrails)
    ▼
@@ -123,8 +123,8 @@ State-changing (gated):
 Install and start the development server:
 
 ```bash
-git clone https://github.com/ashergarland/chatgpt-azure.git
-cd chatgpt-azure
+git clone https://github.com/ashergarland/agent-tool-server-azure.git
+cd agent-tool-server-azure
 npm ci
 cp .env.example .env
 az login
@@ -230,10 +230,10 @@ npm run mcp:stdio     # run the same tools over MCP stdio
 Docker:
 
 ```bash
-docker build -t chatgpt-azure .
+docker build -t agent-tool-server-azure .
 docker run --rm -p 8080:8080 \
   -e API_KEYS="$(openssl rand -hex 32)" \
-  chatgpt-azure
+  agent-tool-server-azure
 ```
 
 ---

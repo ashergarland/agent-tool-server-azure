@@ -78,7 +78,7 @@ describe('config', () => {
       NODE_ENV: 'production',
       PORT: '8080',
       LOG_LEVEL: 'info',
-      SERVICE_NAME: 'ca-chatgpt-azure-prod',
+      SERVICE_NAME: 'ca-agent-tool-server-prod',
       AUTH_MODE: 'api-key',
       API_KEYS: '0123456789abcdef0123456789abcdef0123456789abcdef',
       AZURE_CLIENT_ID: '4c9809f5-7445-4422-8c48-c5cc90c7056d',
