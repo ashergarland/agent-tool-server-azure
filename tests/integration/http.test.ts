@@ -83,6 +83,40 @@ describe('HTTP surface', () => {
     expect(body.tools[0]).toHaveProperty('inputSchema.type', 'object');
   });
 
+  it('serves the same tools over authenticated Streamable HTTP MCP', async () => {
+    const response = await app.http.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: {
+        ...auth,
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+      },
+      payload: {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/list',
+        params: {},
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.tools).toHaveLength(app.registry.list().length);
+  });
+
+  it('requires authentication for remote MCP', async () => {
+    const response = await app.http.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: {
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+      },
+      payload: { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
+    });
+    expect(response.statusCode).toBe(401);
+    expect(response.json().error.code).toBe('unauthorized');
+  });
+
   it('invokes a read tool', async () => {
     const response = await app.http.inject({
       method: 'POST',

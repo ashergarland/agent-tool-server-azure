@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import Fastify, { type FastifyReply } from 'fastify';
 import type { Logger } from 'pino';
 import type { AppConfig } from '../config/index.js';
 import { AppError } from '../errors.js';
+import { createMcpServer } from '../mcp/server.js';
 import { buildOpenApiDocument } from '../openapi/document.js';
 import type { Services } from '../services/index.js';
 import type { ToolRegistry } from '../tools/registry.js';
@@ -70,10 +72,10 @@ export const createHttpServer = (deps: HttpServerDeps): HttpServer => {
     done(null, payload);
   });
 
-  /** Authentication + rate limiting for everything under /tools. */
+  /** Authentication + rate limiting for every tool transport. */
   // codeql[js/missing-rate-limiting]
   app.addHook('onRequest', async (request, reply) => {
-    if (!request.url.startsWith('/tools')) return;
+    if (!request.url.startsWith('/tools') && !request.url.startsWith('/mcp')) return;
 
     const preAuth = preAuthLimiter.consume(`ip:${request.ip}`);
     if (!preAuth.allowed) throw rateLimitExceeded(reply, preAuth);
@@ -122,6 +124,44 @@ export const createHttpServer = (deps: HttpServerDeps): HttpServer => {
       outputSchema: tool.outputJsonSchema,
     })),
   }));
+
+  app.post('/mcp', async (request, reply) => {
+    const principal = request.principal ?? { id: 'anonymous', kind: 'anonymous' as const };
+    const server = createMcpServer(config, registry, services, principal.id);
+    const transport = new StreamableHTTPServerTransport({
+      enableJsonResponse: true,
+    });
+
+    reply.hijack();
+    try {
+      await server.connect(transport as Parameters<typeof server.connect>[0]);
+      await transport.handleRequest(request.raw, reply.raw, request.body);
+    } catch (error) {
+      request.log.error({ err: error, principal: principal.id }, 'MCP request failed');
+      if (!reply.raw.headersSent) {
+        reply.raw.writeHead(500, { 'content-type': 'application/json' });
+        reply.raw.end(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            error: { code: -32603, message: 'Internal server error' },
+            id: null,
+          }),
+        );
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  const methodNotAllowed = (_request: unknown, reply: FastifyReply): void => {
+    void reply.code(405).send({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Method not allowed.' },
+      id: null,
+    });
+  };
+  app.get('/mcp', methodNotAllowed);
+  app.delete('/mcp', methodNotAllowed);
 
   app.post<{ Params: { toolName: string }; Body: unknown }>('/tools/:toolName', async (request) => {
     const { toolName } = request.params;

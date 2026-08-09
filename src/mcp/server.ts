@@ -16,6 +16,7 @@ export const createMcpServer = (
   config: AppConfig,
   registry: ToolRegistry,
   services: Services,
+  principal = 'mcp-client',
 ): McpServer => {
   const server = new McpServer(
     { name: config.service.name, version: config.service.version },
@@ -40,7 +41,7 @@ export const createMcpServer = (
         try {
           const result = await tool.invoke(args, services, {
             requestId: `mcp-${Date.now().toString(36)}`,
-            principal: 'mcp-client',
+            principal,
           });
           return {
             content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
