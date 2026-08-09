@@ -1,5 +1,8 @@
 # chatgpt-azure
 
+[![CI](https://github.com/ashergarland/chatgpt-azure/actions/workflows/ci.yml/badge.svg)](https://github.com/ashergarland/chatgpt-azure/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A backend-only **ChatGPT connector for Azure**. It exposes a small, typed tool surface that lets
 ChatGPT inspect, diagnose and perform a deliberately constrained set of operational actions
 against an Azure environment — authenticating to Azure with a managed identity, never with
@@ -7,6 +10,23 @@ secrets in configuration.
 
 There is no frontend. The service is an HTTP/OpenAPI tool server (plus an MCP transport over the
 same tool registry).
+
+> [!IMPORTANT]
+> This project is under active development. Review the generated OpenAPI document and the RBAC
+> assignments before connecting it to a production subscription. Mutations and their Azure roles
+> are disabled by default.
+
+## Contents
+
+- [How it works](#how-it-works)
+- [Safety model](#safety-model)
+- [Available tools](#available-tools)
+- [Quick start](#quick-start)
+- [HTTP API](#http-api)
+- [Configuration](#configuration)
+- [Deploying to Azure](#deploying-to-azure)
+- [MCP](#mcp)
+- [Contributing and security](#contributing-and-security)
 
 ```
 ChatGPT
@@ -24,7 +44,7 @@ Azure SDK / ARM / Resource Graph
 
 ---
 
-## Design
+## How it works
 
 | Layer     | Location                | Responsibility                                                                                                        |
 | --------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -65,7 +85,7 @@ is bounded in several independent ways:
 
 ---
 
-## Tools
+## Available tools
 
 Read-only:
 
@@ -88,6 +108,42 @@ State-changing (gated):
 | `azure_start_virtual_machine`   | Start a stopped VM.                    |
 | `azure_restart_web_app`         | Restart an App Service / Function App. |
 | `azure_tag_resource`            | Merge tags onto a resource.            |
+
+---
+
+## Quick start
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) 22 or newer and npm
+- An Azure account and the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
+- Azure CLI access to at least one subscription (`az login`)
+- Docker, only if you want to build or run the container locally
+
+Install and start the development server:
+
+```bash
+git clone https://github.com/ashergarland/chatgpt-azure.git
+cd chatgpt-azure
+npm ci
+cp .env.example .env
+az login
+npm run dev
+```
+
+Before starting, replace `API_KEYS` in `.env` with a random value of at least 32 characters. The
+default configuration is read-only. Restrict `AZURE_SUBSCRIPTION_IDS` and
+`AZURE_ALLOWED_RESOURCE_GROUPS` before using the connector with real resources.
+
+In another terminal, confirm that the server is ready:
+
+```bash
+curl http://localhost:8080/health
+curl -H "x-api-key: <your-api-key>" http://localhost:8080/tools
+```
+
+The local OpenAPI document is available at <http://localhost:8080/openapi.json>. For ChatGPT, deploy
+the service behind HTTPS and set `PUBLIC_BASE_URL`; see [Deploying to Azure](#deploying-to-azure).
 
 ---
 
@@ -157,14 +213,7 @@ annotated list.
 
 ## Local development
 
-Requires Node.js 22+.
-
-```bash
-npm install
-cp .env.example .env          # then edit
-az login                      # DefaultAzureCredential falls back to your CLI session
-npm run dev
-```
+Follow the [quick start](#quick-start), then use these project scripts:
 
 Useful scripts:
 
@@ -184,7 +233,9 @@ Docker:
 
 ```bash
 docker build -t chatgpt-azure .
-docker run --rm -p 8080:8080 -e API_KEYS="$(openssl rand -hex 32)" chatgpt-azure
+docker run --rm -p 8080:8080 \
+  -e API_KEYS="$(openssl rand -hex 32)" \
+  chatgpt-azure
 ```
 
 ---
@@ -196,38 +247,15 @@ managed identity, an Azure Container Registry, a Key Vault holding the connector
 Analytics workspace, and a Container App running the connector with the identity attached.
 
 ```bash
-# 1. Provision infrastructure and generate the connector API key
-./scripts/bootstrap/provision.sh <subscription-id> prod westus2
+# Provision infrastructure and generate the connector API key
+./scripts/bootstrap/provision.sh <subscription-id> prod westeurope
 
-# 2. Build the image in ACR and redeploy the Container App
-./scripts/bootstrap/deploy.sh <subscription-id> prod westus2
+# Build the image in ACR and deploy it
+./scripts/bootstrap/deploy.sh <subscription-id> prod westeurope
 ```
 
-`provision.sh` deploys in two passes on purpose. The Container App mounts `connector-api-key`
-directly out of Key Vault, so it cannot be created before that secret exists; the first pass runs
-with `deployApp=false` to create the vault and the identity, the script writes the secret, and the
-second pass brings the app up. The script also grants the invoking user **Key Vault Secrets
-Officer** on the vault — the vault uses RBAC authorisation, so being subscription Owner does not
-by itself grant data-plane access to write the secret.
-
-`PUBLIC_BASE_URL` is deliberately absent until `deploy.sh` runs: the ingress hostname does not
-exist until the app does. The connector starts fine without it, but the OpenAPI document then
-advertises `http://localhost:8080`, so **register the connector in ChatGPT only after `deploy.sh`**,
-which supplies the real hostname. Optional settings are omitted rather than passed as empty
-strings — an empty `PUBLIC_BASE_URL` would fail `z.url()` and crash-loop the container.
-
-> CI validates the templates with `az bicep build` and the linter, which check syntax and never
-> attempt a deployment. Green CI does not prove the templates deploy.
-
-To grant operator permissions, redeploy with `enableMutations=true` — this both assigns the
-operator roles and flips `MUTATIONS_ENABLED` in the Container App:
-
-```bash
-az deployment sub create \
-  --location westus2 \
-  --template-file infra/main.bicep \
-  --parameters infra/parameters/prod.parameters.json enableMutations=true
-```
+For required Azure permissions, scope controls, updates, key rotation, monitoring, troubleshooting,
+and teardown, read the **[deployment and operations guide](docs/deployment.md)**.
 
 ### Registering the connector in ChatGPT
 
@@ -239,6 +267,10 @@ az deployment sub create \
 The four state-changing operations are marked `x-openai-isConsequential: true`, so ChatGPT will
 prompt for confirmation before invoking them. They additionally refuse to run unless the
 deployment set `enableMutations=true`.
+
+> [!NOTE]
+> CI builds and lints the Bicep templates but does not deploy them. Validate changes in a
+> non-production subscription before production rollout.
 
 ---
 
@@ -274,3 +306,13 @@ infra/                   Bicep templates, modules and parameter files
 scripts/bootstrap/       provisioning and deployment scripts
 tests/                   unit and integration tests
 ```
+
+---
+
+## Contributing and security
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and
+quality checks. To report a vulnerability, follow [SECURITY.md](SECURITY.md) rather than opening a
+public issue.
+
+This project is available under the [MIT License](LICENSE).
