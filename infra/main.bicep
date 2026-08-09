@@ -50,11 +50,11 @@ bootstrap script writes the secret, and the second pass brings the app up.
 ''')
 param deployApp bool = true
 
-@description('Deploy an availability test and alert that notify when the connector stops answering /health. Requires alertEmail or alertSmsPhone to be set, otherwise the alert would have nowhere to fire.')
+@description('Deploy an availability test and alert that notify when the connector stops answering /health. Requires alertEmails or alertSmsPhone to be set, otherwise the alert would have nowhere to fire.')
 param enableHealthAlerts bool = false
 
-@description('Email address notified when the connector goes down.')
-param alertEmail string = ''
+@description('Email addresses notified when the connector goes down. Supply at deployment time; do not commit personal addresses to a parameter file.')
+param alertEmails array = []
 
 @description('Phone number notified by SMS when the connector goes down, digits only.')
 param alertSmsPhone string = ''
@@ -177,7 +177,7 @@ module monitoring 'modules/monitoring.bicep' = if (deployApp && enableHealthAler
     tags: defaultTags
     connectorUrl: 'https://${containerApp!.outputs.fqdn}'
     logAnalyticsWorkspaceId: logAnalytics.outputs.id
-    alertEmail: alertEmail
+    alertEmails: alertEmails
     alertSmsPhone: alertSmsPhone
     alertSmsCountryCode: alertSmsCountryCode
   }
