@@ -213,9 +213,7 @@ annotated list.
 
 ## Local development
 
-Follow the [quick start](#quick-start), then use these project scripts:
-
-Useful scripts:
+After following the [quick start](#quick-start), use these project scripts:
 
 ```bash
 npm run typecheck     # tsc --noEmit
