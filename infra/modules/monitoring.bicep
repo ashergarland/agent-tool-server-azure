@@ -21,8 +21,8 @@ param connectorUrl string
 @description('Log Analytics workspace backing the Application Insights component.')
 param logAnalyticsWorkspaceId string
 
-@description('Email address notified when the connector stops responding. Leave empty to skip email.')
-param alertEmail string = ''
+@description('Email addresses notified when the connector stops responding. Empty skips email.')
+param alertEmails array = []
 
 @description('Phone number notified by SMS, digits only, no country code. Leave empty to skip SMS.')
 param alertSmsPhone string = ''
@@ -33,15 +33,15 @@ param alertSmsCountryCode string = '1'
 @description('Tags applied to every resource.')
 param tags object = {}
 
-var emailReceivers = empty(alertEmail)
-  ? []
-  : [
-      {
-        name: 'owner-email'
-        emailAddress: alertEmail
-        useCommonAlertSchema: true
-      }
-    ]
+// Receiver names must be unique within the action group, so they are derived from the index
+// rather than the address, which also keeps the address out of the resource name.
+var emailReceivers = [
+  for (address, index) in alertEmails: {
+    name: 'owner-email-${index}'
+    emailAddress: address
+    useCommonAlertSchema: true
+  }
+]
 
 var smsReceivers = empty(alertSmsPhone)
   ? []
