@@ -4,7 +4,6 @@
   "description": "Backend connector that lets ChatGPT safely inspect, diagnose and operate an Azure environment.",
   "license": "MIT",
   "type": "module",
-  "private": true,
   "engines": {
     "node": ">=22.0.0"
   },
@@ -51,5 +50,22 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.66.0",
     "vitest": "^4.1.10"
-  }
+  },
+  "bin": {
+    "chatgpt-azure-mcp": "dist/mcp/stdio.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "mcp",
+    "azure",
+    "chatgpt",
+    "model-context-protocol"
+  ]
 }

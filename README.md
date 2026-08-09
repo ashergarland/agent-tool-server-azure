@@ -5,8 +5,8 @@ ChatGPT inspect, diagnose and perform a deliberately constrained set of operatio
 against an Azure environment — authenticating to Azure with a managed identity, never with
 secrets in configuration.
 
-There is no frontend. The service is an HTTP/OpenAPI tool server (plus an MCP transport over the
-same tool registry).
+There is no frontend. The service is an HTTP/OpenAPI tool server plus local stdio and remote
+Streamable HTTP MCP transports over the same tool registry.
 
 ```
 ChatGPT
@@ -100,6 +100,7 @@ State-changing (gated):
 | `GET`  | `/openapi.json`     | no   | OpenAPI 3.1 document for the ChatGPT connector. |
 | `GET`  | `/tools`            | yes  | Tool catalogue with JSON Schemas.               |
 | `POST` | `/tools/{toolName}` | yes  | Invoke a tool.                                  |
+| `POST` | `/mcp`              | yes  | Stateless MCP Streamable HTTP endpoint.         |
 
 Tool input may be sent either bare or wrapped in an `input` envelope:
 
@@ -244,14 +245,45 @@ deployment set `enableMutations=true`.
 
 ## MCP
 
-The same registry is served over MCP, so a local MCP client can use the identical tools:
+The same registry is served over MCP, so local and remote clients use identical tools and
+guardrails.
+
+Local stdio:
 
 ```bash
-npm run build && npm run mcp:stdio
+npm run build
+npm run mcp:stdio
+# Once published: npx chatgpt-azure-mcp
 ```
 
-Read tools are annotated `readOnlyHint`, write tools `destructiveHint`; the guardrails are the
-same objects used by the HTTP transport.
+Remote Streamable HTTP:
+
+```text
+https://<connector-host>/mcp
+```
+
+Send the same bearer token or `x-api-key` used by `/tools`. The endpoint is stateless, authenticated
+and rate limited, which allows Container Apps to scale it horizontally. Read tools are annotated
+`readOnlyHint`, write tools `destructiveHint`; the guardrails are the same objects used by the HTTP
+transport.
+
+---
+
+## Catalog and publication
+
+- `server.json` is the versioned manifest for the official MCP Registry. GitHub's MCP Registry
+  consumes the official registry, so it does not require a separate incompatible manifest.
+- `catalog.json` is the lightweight, machine-readable catalog for this curated server family. URL
+  templates reflect that each deployment has its own Container Apps hostname.
+- `catalogs/docker-mcp.yaml` uses Docker's existing custom-catalog format. Replace the example image
+  reference with the immutable image published by your deployment before importing it.
+- `tool-server-template/` contains the metadata, security, test and deployment contract for adding
+  another server to this family.
+
+Before publishing a release, update every manifest to the package version, publish the npm package
+and OCI image, validate `server.json` with `mcp-publisher validate`, then publish it with
+`mcp-publisher publish`. Submit the same released image to Docker's MCP Catalog and selected
+community directories; do not add third-party servers to `catalog.json`.
 
 ---
 

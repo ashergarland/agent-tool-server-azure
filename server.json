@@ -1,0 +1,52 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.ashergarland/chatgpt-azure",
+  "title": "Azure Operations",
+  "description": "Safely inspect, diagnose, and perform constrained operations on Azure resources.",
+  "websiteUrl": "https://github.com/ashergarland/chatgpt-azure",
+  "repository": {
+    "url": "https://github.com/ashergarland/chatgpt-azure",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "chatgpt-azure",
+      "version": "0.1.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "AUTH_MODE",
+          "description": "Use disabled for local stdio; remote HTTP deployments must use api-key or entra-jwt.",
+          "default": "disabled"
+        },
+        {
+          "name": "AZURE_CLIENT_ID",
+          "description": "Optional client ID for a user-assigned managed identity."
+        },
+        {
+          "name": "AZURE_TENANT_ID",
+          "description": "Optional Azure tenant ID."
+        },
+        {
+          "name": "AZURE_SUBSCRIPTION_IDS",
+          "description": "Comma-separated subscription allow-list."
+        },
+        {
+          "name": "AZURE_ALLOWED_RESOURCE_GROUPS",
+          "description": "Comma-separated resource-group allow-list."
+        },
+        {
+          "name": "MUTATIONS_ENABLED",
+          "description": "Master switch for state-changing tools.",
+          "default": "false"
+        }
+      ]
+    }
+  ]
+}

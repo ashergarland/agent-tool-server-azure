@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ashergarland/chatgpt-azure/blob/main/tool-server-template/catalog.schema.json",
+  "title": "Curated tool server family catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "name", "scope", "servers"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "type": "string" },
+    "name": { "type": "string" },
+    "scope": { "const": "curated-server-family" },
+    "servers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/server" }
+    }
+  },
+  "$defs": {
+    "urlTemplate": {
+      "type": "string",
+      "pattern": "^\\{PUBLIC_BASE_URL\\}/"
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "description",
+        "version",
+        "repositoryUrl",
+        "package",
+        "remoteMcp",
+        "openapi",
+        "health",
+        "tools",
+        "safety"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "version": { "type": "string" },
+        "repositoryUrl": { "type": "string", "format": "uri" },
+        "package": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["registry", "name", "url", "transport"],
+          "properties": {
+            "registry": { "type": "string" },
+            "name": { "type": "string" },
+            "url": { "type": "string", "format": "uri" },
+            "transport": { "const": "stdio" }
+          }
+        },
+        "remoteMcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["urlTemplate", "transport", "authentication"],
+          "properties": {
+            "urlTemplate": { "$ref": "#/$defs/urlTemplate" },
+            "transport": { "const": "streamable-http" },
+            "authentication": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "openapi": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["urlTemplate"],
+          "properties": {
+            "urlTemplate": { "$ref": "#/$defs/urlTemplate" }
+          }
+        },
+        "health": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["urlTemplate", "status"],
+          "properties": {
+            "urlTemplate": { "$ref": "#/$defs/urlTemplate" },
+            "status": { "enum": ["healthy", "degraded", "unavailable", "self-hosted"] }
+          }
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "summary", "safety"],
+            "properties": {
+              "name": { "type": "string" },
+              "summary": { "type": "string" },
+              "safety": { "enum": ["read-only", "mutation-gated"] }
+            }
+          }
+        },
+        "safety": {
+          "type": "object",
+          "additionalProperties": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

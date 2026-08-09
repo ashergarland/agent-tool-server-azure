@@ -58,3 +58,4 @@ az deployment sub create \
 echo "==> Deployed. Verifying health"
 curl -fsS "https://${FQDN}/health" && echo
 echo "OpenAPI: https://${FQDN}/openapi.json"
+echo "Remote MCP: https://${FQDN}/mcp"
