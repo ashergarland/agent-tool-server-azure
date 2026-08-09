@@ -126,7 +126,9 @@ export const createHttpServer = (deps: HttpServerDeps): HttpServer => {
   }));
 
   app.post('/mcp', async (request, reply) => {
-    const principal = request.principal ?? { id: 'anonymous', kind: 'anonymous' as const };
+    const principal = request.principal;
+    if (!principal) throw new AppError('unauthorized', 'Authentication context missing');
+
     const server = createMcpServer(config, registry, services, principal.id);
     const transport = new StreamableHTTPServerTransport({
       enableJsonResponse: true,
@@ -149,6 +151,7 @@ export const createHttpServer = (deps: HttpServerDeps): HttpServer => {
         );
       }
     } finally {
+      await transport.close();
       await server.close();
     }
   });
