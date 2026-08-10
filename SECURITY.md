@@ -1,6 +1,6 @@
 # Security policy
 
-Security is a core design constraint of chatgpt-azure. The connector can receive credentials and
+Security is a core design constraint of agent-tool-server-azure. The server can receive credentials and
 operate against real Azure resources, so suspected vulnerabilities must be handled privately.
 
 ## Supported versions
@@ -13,7 +13,7 @@ repository for updates.
 
 Use GitHub's private vulnerability reporting flow:
 
-<https://github.com/ashergarland/chatgpt-azure/security/advisories/new>
+<https://github.com/ashergarland/agent-tool-server-azure/security/advisories/new>
 
 Do not open a public issue, discussion, or pull request for an undisclosed vulnerability. Include:
 

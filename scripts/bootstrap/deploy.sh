@@ -15,7 +15,7 @@ ENVIRONMENT="${2:-prod}"
 LOCATION="${3:-westeurope}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-RESOURCE_GROUP="rg-chatgpt-azure-${ENVIRONMENT}"
+RESOURCE_GROUP="rg-agent-tool-server-azure-${ENVIRONMENT}"
 TAG="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
 
 az account set --subscription "${SUBSCRIPTION_ID}"
@@ -26,26 +26,26 @@ if [[ -z "${REGISTRY_NAME}" ]]; then
   exit 1
 fi
 REGISTRY_SERVER="$(az acr show --name "${REGISTRY_NAME}" --query loginServer --output tsv)"
-IMAGE="${REGISTRY_SERVER}/chatgpt-azure:${TAG}"
+IMAGE="${REGISTRY_SERVER}/agent-tool-server-azure:${TAG}"
 VERSION="$(node -p "require('${REPO_ROOT}/package.json').version")"
 
 echo "==> Building ${IMAGE} in ACR"
 az acr build \
   --registry "${REGISTRY_NAME}" \
-  --image "chatgpt-azure:${TAG}" \
+  --image "agent-tool-server-azure:${TAG}" \
   --build-arg "GIT_SHA=${TAG}" \
   --build-arg "SERVICE_VERSION=${VERSION}" \
   --file "${REPO_ROOT}/Dockerfile" \
   "${REPO_ROOT}" \
   --output none
 
-APP_NAME="ca-chatgpt-azure-${ENVIRONMENT}"
+APP_NAME="ca-agent-tool-server-${ENVIRONMENT}"
 FQDN="$(az containerapp show --name "${APP_NAME}" --resource-group "${RESOURCE_GROUP}" \
   --query properties.configuration.ingress.fqdn --output tsv)"
 
 echo "==> Redeploying ${APP_NAME} with the new image"
 az deployment sub create \
-  --name "chatgpt-azure-${ENVIRONMENT}-$(date +%Y%m%d%H%M%S)" \
+  --name "agent-tool-server-azure-${ENVIRONMENT}-$(date +%Y%m%d%H%M%S)" \
   --location "${LOCATION}" \
   --template-file "${REPO_ROOT}/infra/main.bicep" \
   --parameters \

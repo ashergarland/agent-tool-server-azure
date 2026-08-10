@@ -200,7 +200,7 @@ export const buildOpenApiDocument = (config: AppConfig, registry: ToolRegistry):
   return {
     openapi: '3.1.0',
     info: {
-      title: 'ChatGPT Azure Connector',
+      title: 'Agent Tool Server for Azure',
       version: config.service.version,
       description:
         'Backend connector that lets ChatGPT inspect, diagnose and perform a constrained set of ' +

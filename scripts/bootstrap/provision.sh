@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Provisions the chatgpt-azure connector infrastructure and stores a freshly generated
+# Provisions the agent-tool-server-azure infrastructure and stores a freshly generated
 # connector API key in Key Vault.
 #
 # Usage:
@@ -23,7 +23,7 @@ az account set --subscription "${SUBSCRIPTION_ID}"
 # The Container App mounts the connector API key straight out of Key Vault, so it cannot be
 # created until that secret exists. Pass 1 stands up the vault and the identity, we write the
 # secret, and pass 2 brings the app up.
-FOUNDATION_DEPLOYMENT="chatgpt-azure-${ENVIRONMENT}-foundation-${STAMP}"
+FOUNDATION_DEPLOYMENT="agent-tool-server-azure-${ENVIRONMENT}-foundation-${STAMP}"
 echo "==> Deploying foundation: identity, registry, vault, logs, RBAC (${FOUNDATION_DEPLOYMENT})"
 az deployment sub create \
   --name "${FOUNDATION_DEPLOYMENT}" \
@@ -76,7 +76,7 @@ fi
 # The app's ingress hostname is derived from the managed environment domain, which only exists
 # after the app deployment. Deploy once to create it, then read the FQDN back; deploy.sh keeps
 # PUBLIC_BASE_URL correct from then on.
-APP_DEPLOYMENT="chatgpt-azure-${ENVIRONMENT}-app-${STAMP}"
+APP_DEPLOYMENT="agent-tool-server-azure-${ENVIRONMENT}-app-${STAMP}"
 echo "==> Deploying the Container App (${APP_DEPLOYMENT})"
 az deployment sub create \
   --name "${APP_DEPLOYMENT}" \
