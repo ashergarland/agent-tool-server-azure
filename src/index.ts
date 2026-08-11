@@ -41,7 +41,7 @@ const main = async (): Promise<void> => {
       mutationsEnabled: config.guardrails.mutationsEnabled,
       scopedSubscriptions: config.azure.allowedSubscriptionIds.length,
     },
-    'chatgpt-azure connector listening',
+    'Azure agent tool server listening',
   );
 };
 

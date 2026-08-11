@@ -10,6 +10,7 @@ describe('config', () => {
   it('applies defaults', () => {
     const config = buildConfig(envSchema.parse(baseEnv));
     expect(config.http.port).toBe(8080);
+    expect(config.service.name).toBe('agent-tool-server-azure');
     expect(config.guardrails.mutationsEnabled).toBe(false);
     expect(config.guardrails.confirmationRequired).toBe(true);
     expect(config.auth.mode).toBe('disabled');

@@ -15,6 +15,8 @@ ENVIRONMENT="${2:-prod}"
 LOCATION="${3:-westeurope}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Existing Azure resources intentionally retain their original names. New application images use
+# the public project identity and are deployed into that compatible resource set.
 RESOURCE_GROUP="rg-chatgpt-azure-${ENVIRONMENT}"
 TAG="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
 
@@ -26,13 +28,13 @@ if [[ -z "${REGISTRY_NAME}" ]]; then
   exit 1
 fi
 REGISTRY_SERVER="$(az acr show --name "${REGISTRY_NAME}" --query loginServer --output tsv)"
-IMAGE="${REGISTRY_SERVER}/chatgpt-azure:${TAG}"
+IMAGE="${REGISTRY_SERVER}/agent-tool-server-azure:${TAG}"
 VERSION="$(node -p "require('${REPO_ROOT}/package.json').version")"
 
 echo "==> Building ${IMAGE} in ACR"
 az acr build \
   --registry "${REGISTRY_NAME}" \
-  --image "chatgpt-azure:${TAG}" \
+  --image "agent-tool-server-azure:${TAG}" \
   --build-arg "GIT_SHA=${TAG}" \
   --build-arg "SERVICE_VERSION=${VERSION}" \
   --file "${REPO_ROOT}/Dockerfile" \

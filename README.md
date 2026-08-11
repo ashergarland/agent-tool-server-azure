@@ -1,20 +1,21 @@
-# chatgpt-azure
+# Azure Agent Tool Server
 
-A backend-only **ChatGPT connector for Azure**. It exposes a small, typed tool surface that lets
-ChatGPT inspect, diagnose and perform a deliberately constrained set of operational actions
-against an Azure environment — authenticating to Azure with a managed identity, never with
-secrets in configuration.
+A secure, backend-only MCP and OpenAPI server for Azure operations. It gives AI clients a small,
+typed tool surface for inventory, diagnostics, metrics, health triage, and deliberately constrained
+operational actions. The hosted server authenticates to Azure with managed identity rather than
+storing Azure credentials in application configuration.
 
-There is no frontend. The service is an HTTP/OpenAPI tool server plus local stdio and remote
-Streamable HTTP MCP transports over the same tool registry.
+There is no frontend. ChatGPT can import the generated OpenAPI document, MCP clients can use local
+stdio or remote Streamable HTTP, and every transport invokes the same validated tool registry and
+guardrails.
 
 ```
-ChatGPT
+AI client
    │  authenticated tool request
    ▼
-chatgpt-azure  ── transport (HTTP/OpenAPI today, MCP over the same registry)
-   │            ── tool registry (Zod-validated input/output)
-   │            ── service layer (inventory / diagnostics / operations + guardrails)
+agent-tool-server-azure  ── HTTP/OpenAPI and MCP transports
+   │                      ── tool registry (Zod-validated input/output)
+   │                      ── services (inventory / diagnostics / operations + guardrails)
    ▼
 Azure provider adapter
    │  Managed Identity
@@ -184,8 +185,9 @@ npm run mcp:stdio     # run the same tools over MCP stdio
 Docker:
 
 ```bash
-docker build -t chatgpt-azure .
-docker run --rm -p 8080:8080 -e API_KEYS="$(openssl rand -hex 32)" chatgpt-azure
+docker build -t agent-tool-server-azure .
+docker run --rm -p 8080:8080 \
+  -e API_KEYS="$(openssl rand -hex 32)" agent-tool-server-azure
 ```
 
 ---
@@ -195,6 +197,16 @@ docker run --rm -p 8080:8080 -e API_KEYS="$(openssl rand -hex 32)" chatgpt-azure
 Infrastructure lives in `infra/` (Bicep, subscription-scoped) and provisions a user-assigned
 managed identity, an Azure Container Registry, a Key Vault holding the connector API key, a Log
 Analytics workspace, and a Container App running the connector with the identity attached.
+
+### Existing deployment compatibility
+
+The public project identity is `agent-tool-server-azure`, but existing Azure resources deliberately
+retain their original `chatgpt-azure` names. Renaming a resource group, Container App, environment,
+identity, registry, workspace, Key Vault, or monitoring resource would recreate infrastructure,
+change the connector hostname, or disconnect secrets and role assignments. The bootstrap scripts
+therefore continue to discover resources such as `rg-chatgpt-azure-prod` and
+`ca-chatgpt-azure-prod`. These are compatibility identifiers, not stale repository or package
+branding. New image builds use the `agent-tool-server-azure` repository inside the existing ACR.
 
 ```bash
 # 1. Provision infrastructure and generate the connector API key
@@ -216,6 +228,14 @@ exist until the app does. The connector starts fine without it, but the OpenAPI 
 advertises `http://localhost:8080`, so **register the connector in ChatGPT only after `deploy.sh`**,
 which supplies the real hostname. Optional settings are omitted rather than passed as empty
 strings — an empty `PUBLIC_BASE_URL` would fail `z.url()` and crash-loop the container.
+
+### Cost and monitoring
+
+The Container App defaults to zero idle replicas and 0.25 vCPU / 0.5 GiB, so compute is billed only
+while requests are served; the first request after an idle period can incur a cold start. Log
+Analytics has a 1 GB/day ingestion cap. Availability alerts are opt-in because they require an
+explicit notification destination. Azure Container Registry is a fixed-cost resource and does not
+scale to zero.
 
 > CI validates the templates with `az bicep build` and the linter, which check syntax and never
 > attempt a deployment. Green CI does not prove the templates deploy.
@@ -253,7 +273,7 @@ Local stdio:
 ```bash
 npm run build
 npm run mcp:stdio
-# Once published: npx chatgpt-azure-mcp
+# Once the npm package is published: npx agent-tool-server-azure-mcp
 ```
 
 Remote Streamable HTTP:
@@ -269,21 +289,22 @@ transport.
 
 ---
 
-## Catalog and publication
+## Template, registry, and publication
 
-- `server.json` is the versioned manifest for the official MCP Registry. GitHub's MCP Registry
-  consumes the official registry, so it does not require a separate incompatible manifest.
-- `catalog.json` is the lightweight, machine-readable catalog for this curated server family. URL
-  templates reflect that each deployment has its own Container Apps hostname.
-- `catalogs/docker-mcp.yaml` uses Docker's existing custom-catalog format. Replace the example image
-  reference with the immutable image published by your deployment before importing it.
-- `tool-server-template/` contains the metadata, security, test and deployment contract for adding
-  another server to this family.
+- [`agent-tool-server-template`](https://github.com/ashergarland/agent-tool-server-template) owns the
+  reusable architecture, security, testing, and deployment scaffold.
+- [`agent-tool-server-registry`](https://github.com/ashergarland/agent-tool-server-registry) owns the
+  curated family catalog, schema, and registration lifecycle. This server has no runtime dependency
+  on that registry.
+- This repository owns its implementation and `server.json`. The manifest intentionally contains no
+  npm package, remote endpoint, or container distribution: none has been published as a stable
+  public distribution yet.
 
-Before publishing a release, update every manifest to the package version, publish the npm package
-and OCI image, validate `server.json` with `mcp-publisher validate`, then publish it with
-`mcp-publisher publish`. Submit the same released image to Docker's MCP Catalog and selected
-community directories; do not add third-party servers to `catalog.json`.
+Before publishing a release, publish the npm package and an immutable OCI image, add only the
+verified distributions to `server.json`, validate it with `mcp-publisher validate`, and then publish
+it with `mcp-publisher publish`. The central registry entry must then be reconciled with this
+repository's final manifest and tool list; publication in npm, the official MCP Registry, or
+Docker's catalog is separate from inclusion in the curated family registry.
 
 ---
 

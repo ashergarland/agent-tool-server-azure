@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# Provisions the chatgpt-azure connector infrastructure and stores a freshly generated
+# Provisions the Azure agent tool server and stores a freshly generated connector key.
+# Azure resource and deployment names retain the original chatgpt-azure prefix so this script
+# continues to operate the existing deployment rather than creating a parallel environment.
 # connector API key in Key Vault.
 #
 # Usage:

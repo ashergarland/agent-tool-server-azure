@@ -1,7 +1,7 @@
 {
-  "name": "chatgpt-azure",
+  "name": "agent-tool-server-azure",
   "version": "0.1.0",
-  "description": "Backend connector that lets ChatGPT safely inspect, diagnose and operate an Azure environment.",
+  "description": "Secure MCP and OpenAPI server for inspecting, diagnosing, and performing constrained operations on Azure resources.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -14,6 +14,7 @@
     "dev": "tsx watch src/index.ts",
     "mcp:stdio": "node dist/mcp/stdio.js",
     "openapi:emit": "tsx scripts/emit-openapi.ts",
+    "metadata:validate": "tsx scripts/validate-metadata.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -25,7 +26,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ashergarland/chatgpt-azure.git"
+    "url": "git+https://github.com/ashergarland/agent-tool-server-azure.git"
   },
   "dependencies": {
     "@azure/arm-appservice": "^19.0.0",
@@ -52,7 +53,7 @@
     "vitest": "^4.1.10"
   },
   "bin": {
-    "chatgpt-azure-mcp": "dist/mcp/stdio.js"
+    "agent-tool-server-azure-mcp": "dist/mcp/stdio.js"
   },
   "files": [
     "dist",

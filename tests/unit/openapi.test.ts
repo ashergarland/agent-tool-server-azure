@@ -55,6 +55,10 @@ describe('OpenAPI document', () => {
     expect(bareObjectSchemas(document)).toEqual([]);
   });
 
+  it('uses the current public project identity', () => {
+    expect(at(document, 'info', 'title')).toBe('Azure Agent Tool Server');
+  });
+
   it('describes the /version payload so the importer can validate it', () => {
     const properties = at(responseSchema('/version'), 'properties');
     expect(properties).toMatchObject({

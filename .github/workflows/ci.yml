@@ -49,6 +49,9 @@ jobs:
       - name: Emit OpenAPI document
         run: npm run openapi:emit -- openapi.json
 
+      - name: Validate metadata
+        run: npm run metadata:validate
+
       - name: Upload OpenAPI document
         uses: actions/upload-artifact@v4
         with:
@@ -67,7 +70,7 @@ jobs:
           context: .
           push: false
           load: true
-          tags: chatgpt-azure:ci
+          tags: agent-tool-server-azure:ci
           build-args: |
             GIT_SHA=${{ github.sha }}
 
@@ -77,7 +80,7 @@ jobs:
         run: |
           docker run -d --name connector -p 8080:8080 \
             -e API_KEYS="$API_KEY" \
-            chatgpt-azure:ci
+            agent-tool-server-azure:ci
           for _ in $(seq 1 20); do
             if curl -fsS http://localhost:8080/health > /dev/null; then break; fi
             sleep 1
@@ -105,3 +108,6 @@ jobs:
             echo "Linting $template"
             az bicep lint --file "$template"
           done
+
+      - name: Validate bootstrap scripts
+        run: bash -n scripts/bootstrap/*.sh

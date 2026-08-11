@@ -1,7 +1,7 @@
 targetScope = 'subscription'
 
 metadata description = '''
-Deploys the chatgpt-azure connector: a user-assigned managed identity, a container registry,
+Deploys the Azure agent tool server: a user-assigned managed identity, a container registry,
 a Key Vault holding the connector API key, a Log Analytics workspace, and a Container App that
 runs the connector image. The identity is granted read-only Azure RBAC by default; operator
 roles are only assigned when `enableMutations` is true.
@@ -80,7 +80,7 @@ var assignedRoles = enableMutations ? concat(readRoles, writeRoles) : readRoles
 
 var suffix = uniqueString(subscription().id, resourceGroupName)
 var defaultTags = union(tags, {
-  workload: 'chatgpt-azure'
+  workload: 'agent-tool-server-azure'
   environment: environmentName
   managedBy: 'bicep'
 })
