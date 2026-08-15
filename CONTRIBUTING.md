@@ -34,8 +34,9 @@ against Azure requires `az login`; see the [quick start](README.md#quick-start).
 5. Update the README, OpenAPI descriptions, or deployment guide when the public behavior changes.
 
 Provider-specific Azure SDK types belong in `src/provider`. Services and tool definitions should
-depend on the provider interface, not directly on SDK clients. Both HTTP and MCP use the same tool
-registry, so a feature should not be implemented in only one transport.
+depend on the provider interface, not directly on SDK clients. All three transports — HTTP, stdio
+MCP and Streamable HTTP MCP — are built from the same tool registry, so a feature must never be
+implemented in only one of them; a parity test enforces this.
 
 ## Quality checks
 
@@ -48,6 +49,8 @@ npm run typecheck
 npm run test:coverage
 npm run build
 npm run openapi:emit -- /tmp/agent-tool-server-azure-openapi.json
+npm run openapi:check /tmp/agent-tool-server-azure-openapi.json
+npm run metadata:check
 ```
 
 If formatting fails, run `npm run format`, review the result, and repeat the checks. Infrastructure
@@ -58,9 +61,16 @@ az bicep build --file infra/main.bicep --stdout > /dev/null
 for template in infra/main.bicep infra/modules/*.bicep; do
   az bicep lint --file "$template"
 done
+shellcheck --severity=warning scripts/lib/*.sh scripts/bootstrap/*.sh
 ```
 
 Do not use a production subscription to test infrastructure changes.
+
+## Tests must not need Azure
+
+The suite runs with fake Azure providers, compiler and process adapters, record stores and clocks.
+A test that needs an Azure account, a Bicep binary or a network connection will not be accepted:
+it cannot run in CI for a fork, and it cannot fail for a reason a contributor can act on.
 
 ## Pull requests
 

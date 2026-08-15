@@ -8,4 +8,19 @@ coverage/
 .DS_Store
 .vscode/
 .idea/
+
+# Emitted artefacts. The OpenAPI document is generated from the registry on demand.
 openapi.json
+*.tgz
+
+# Anything the server or its tooling produces at runtime. Deployment records describe real
+# infrastructure, and a compiler cache is neither reproducible nor reviewable.
+.bicep/
+bicep-cache/
+deployment-records/
+*.deployment-record.json
+
+# Local Azure configuration belongs to a person, not to the repository.
+.azure/
+azure.local.json
+*.local.parameters.json

@@ -21,6 +21,8 @@ RUN npm ci --omit=dev --ignore-scripts
 FROM alpine:3.20 AS compiler
 ARG BICEP_VERSION=v0.30.23
 ARG BICEP_SHA256=""
+# The final sha256sum records the digest of the installed binary so operators can read it out of the
+# image and pin BICEP_CLI_SHA256 without trusting a value copied from elsewhere.
 RUN apk add --no-cache wget ca-certificates \
     && wget -q -O /tmp/bicep \
       "https://github.com/Azure/bicep/releases/download/${BICEP_VERSION}/bicep-linux-musl-x64" \
@@ -31,7 +33,6 @@ RUN apk add --no-cache wget ca-certificates \
        fi \
     && install -m 0555 -o root -g root /tmp/bicep /usr/local/bin/bicep \
     && rm /tmp/bicep \
-    # Record the digest so operators can read it out of the image and pin BICEP_CLI_SHA256.
     && sha256sum /usr/local/bin/bicep | cut -d' ' -f1 > /usr/local/share/bicep.sha256
 
 # ---- runtime --------------------------------------------------------------

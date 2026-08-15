@@ -34,12 +34,18 @@ details and ask the maintainer to establish a private reporting channel.
 
 Operators are responsible for:
 
-- restricting the managed identity with Azure RBAC;
-- configuring subscription and resource-group allow-lists;
-- keeping mutations disabled unless explicitly required;
-- rotating connector credentials and limiting access to Key Vault;
-- reviewing generated OpenAPI and infrastructure changes before deployment; and
-- monitoring authentication failures, throttling, upstream errors, and mutation audit logs.
+- restricting the operator and deployment managed identities with Azure RBAC, and never granting
+  the deployment identity Owner;
+- configuring subscription, resource group and management group allow-lists;
+- keeping mutations and generic deployment disabled unless explicitly required;
+- pinning the Bicep compiler digest (`BICEP_CLI_SHA256`) wherever deployments are enabled;
+- keeping remote Bicep module restore disabled unless the registries involved are trusted;
+- rotating API keys and limiting access to Key Vault and the deployment record storage account;
+- reviewing the generated OpenAPI document, the parameter files and infrastructure changes before
+  deployment; and
+- monitoring authentication failures, throttling, upstream errors, and the mutation and deployment
+  audit logs.
 
-The [deployment guide](docs/deployment.md) contains hardening and operational guidance. Never use
-sample credentials or unrestricted access in production.
+The [deployment guide](docs/deployment.md) contains hardening and operational guidance, and the
+[threat model](docs/threat-model.md) states what the server does and does not defend against. Never
+use sample credentials or unrestricted access in production.
