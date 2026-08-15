@@ -19,8 +19,10 @@ RUN npm ci --omit=dev --ignore-scripts
 # runtime: a control plane that can fetch and execute a binary on demand is a supply-chain hole, no
 # matter how it is scoped. Supply BICEP_SHA256 to have the build fail on a digest mismatch.
 FROM alpine:3.20 AS compiler
-ARG BICEP_VERSION=v0.30.23
-ARG BICEP_SHA256=""
+# Pinned to a specific release, with its published digest as the default. Both are build args so an
+# operator can move the pin deliberately; BICEP_SHA256 is verified whenever it is non-empty.
+ARG BICEP_VERSION=v0.46.1
+ARG BICEP_SHA256=408b739151c7882d7a3019fd8f284751a568684cae4e8219dcd30fad2b07d70f
 # The final sha256sum records the digest of the installed binary so operators can read it out of the
 # image and pin BICEP_CLI_SHA256 without trusting a value copied from elsewhere.
 RUN apk add --no-cache wget ca-certificates \

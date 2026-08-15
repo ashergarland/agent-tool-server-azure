@@ -376,6 +376,21 @@ npm run mcp:stdio     # run the same tools over MCP stdio
 Tests use fake Azure providers, compiler and process adapters, record stores and clocks. The suite
 touches no Azure account and no network.
 
+The hand-written ARM client is additionally covered by contract tests that point the _real_
+`ArmRestClient` and `ArmDeploymentClient` at a local stub HTTP server, pinning the request shapes
+they produce. That proves the requests are what was intended, not that ARM accepts them — for the
+latter there is a read-only live check:
+
+```bash
+export BICEP_CLI_PATH="$(az bicep version >/dev/null && echo "$HOME/.azure/bin/bicep")"
+npm run verify:live -- <subscription-id> <existing-resource-group> <region>
+```
+
+It exercises the real credential chain, Resource Graph, activity log, Resource Health, the real
+Bicep compiler and a real ARM what-if, and asserts that the security boundary holds against live
+infrastructure. It is strictly non-mutating: mutations stay disabled, and what-if predicts a change
+set without creating anything.
+
 Docker:
 
 ```bash

@@ -17,6 +17,7 @@
     "openapi:emit": "tsx scripts/emit-openapi.ts",
     "openapi:check": "tsx scripts/check-openapi.ts",
     "metadata:check": "vitest run tests/unit/server-metadata.test.ts",
+    "verify:live": "tsx scripts/live-verify.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
