@@ -1,0 +1,86 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.ashergarland/agent-tool-server-azure",
+  "description": "Inspect, diagnose, operate and deploy Azure through a guard-railed control plane",
+  "version": "0.2.0",
+  "repository": {
+    "url": "https://github.com/ashergarland/agent-tool-server-azure",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/ashergarland/agent-tool-server-azure#readme",
+  "packages": [
+    {
+      "registryType": "oci",
+      "registryBaseUrl": "https://ghcr.io",
+      "identifier": "ghcr.io/ashergarland/agent-tool-server-azure",
+      "version": "0.2.0",
+      "runtimeHint": "docker",
+      "transport": { "type": "stdio" },
+      "runtimeArguments": [
+        { "type": "positional", "value": "run", "isRequired": true },
+        { "type": "positional", "value": "--rm", "isRequired": true },
+        { "type": "positional", "value": "-i", "isRequired": true }
+      ],
+      "packageArguments": [
+        { "type": "positional", "value": "node", "isRequired": true },
+        { "type": "positional", "value": "dist/mcp/stdio.js", "isRequired": true }
+      ],
+      "environmentVariables": [
+        {
+          "name": "AZURE_SUBSCRIPTION_IDS",
+          "description": "Comma-separated Azure subscription ids the server may touch. Leave unset to allow every subscription the signed-in identity can already see.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "AZURE_ALLOWED_RESOURCE_GROUPS",
+          "description": "Comma-separated resource group names the server may touch. Empty means every group inside the allowed subscriptions.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "AZURE_CLIENT_ID",
+          "description": "Client id of the user-assigned managed identity used for reads and operations. Omit locally to use the ambient az login session.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "AZURE_TENANT_ID",
+          "description": "Entra tenant id, when the ambient credential resolves more than one tenant.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "MUTATIONS_ENABLED",
+          "description": "Enable the four guarded state-changing tools. Disabled by default; dry runs always work.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "DEPLOYMENTS_ENABLED",
+          "description": "Enable generic Bicep validate, what-if, deploy, status and rollback. Disabled by default and requires a pinned Bicep CLI.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "BICEP_CLI_PATH",
+          "description": "Absolute path of the Bicep CLI installed in the image. Required when DEPLOYMENTS_ENABLED is true.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "BICEP_CLI_SHA256",
+          "description": "Expected SHA-256 of that Bicep CLI. The server refuses to compile if the digest does not match.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "AZURE_DEPLOYMENT_CLIENT_ID",
+          "description": "Client id of the separate user-assigned identity used only for deployments.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import type { AppConfig } from '../config/index.js';
+import { SERVER_INSTRUCTIONS } from '../tools/instructions.js';
 import type { RegisteredTool, ToolRegistry } from '../tools/registry.js';
 
 type JsonObject = Record<string, unknown>;
@@ -45,8 +46,9 @@ const versionSchema: JsonObject = {
 
 const toolCatalogueSchema: JsonObject = {
   type: 'object',
-  required: ['tools'],
+  required: ['tools', 'instructions'],
   properties: {
+    instructions: { type: 'string' },
     tools: {
       type: 'array',
       items: {
@@ -58,11 +60,35 @@ const toolCatalogueSchema: JsonObject = {
           summary: { type: 'string' },
           description: { type: 'string' },
           kind: { type: 'string' },
+          annotations: { type: 'object', additionalProperties: true },
+          routing: { type: 'object', additionalProperties: true },
           inputSchema: { type: 'object', additionalProperties: true },
           outputSchema: { type: 'object', additionalProperties: true },
         },
       },
     },
+  },
+};
+
+const readinessSchema: JsonObject = {
+  type: 'object',
+  required: ['ready', 'service', 'components', 'capabilities'],
+  properties: {
+    ready: { type: 'boolean' },
+    service: { type: 'string' },
+    version: { type: 'string' },
+    gitSha: { type: 'string' },
+    environment: { type: 'string' },
+    checkedAt: { type: 'string' },
+    components: {
+      type: 'object',
+      additionalProperties: {
+        type: 'object',
+        required: ['state'],
+        properties: { state: { type: 'string' }, detail: { type: 'string' } },
+      },
+    },
+    capabilities: { type: 'object', additionalProperties: true },
   },
 };
 
@@ -103,10 +129,16 @@ const toolPath = (tool: RegisteredTool): JsonObject => ({
     summary: tool.summary,
     description:
       tool.kind === 'write'
-        ? `${tool.description}\n\nThis operation changes Azure state. Always call it with dryRun=true first and obtain explicit user confirmation before setting confirm=true.`
+        ? `${tool.description}\n\nThis operation changes Azure state. Always preview first (dryRun=true, or azure_what_if_bicep for deployments) and obtain explicit user confirmation before setting confirm=true.`
         : tool.description,
     tags: [tool.kind === 'write' ? 'operations' : 'read'],
     'x-openai-isConsequential': tool.kind === 'write',
+    'x-tool-annotations': {
+      readOnlyHint: tool.annotations.readOnlyHint,
+      destructiveHint: tool.annotations.destructiveHint,
+      idempotentHint: tool.annotations.idempotentHint,
+      openWorldHint: tool.annotations.openWorldHint,
+    },
     requestBody: {
       required: true,
       content: { 'application/json': { schema: tool.inputJsonSchema } },
@@ -165,6 +197,23 @@ export const buildOpenApiDocument = (config: AppConfig, registry: ToolRegistry):
         },
       },
     },
+    '/ready': {
+      get: {
+        operationId: 'ready',
+        summary: 'Readiness probe: can the server actually do its job?',
+        security: [],
+        responses: {
+          '200': {
+            description: 'Every required component is usable',
+            content: { 'application/json': { schema: readinessSchema } },
+          },
+          '503': {
+            description: 'At least one required component is unavailable',
+            content: { 'application/json': { schema: readinessSchema } },
+          },
+        },
+      },
+    },
     '/version': {
       get: {
         operationId: 'version',
@@ -203,10 +252,12 @@ export const buildOpenApiDocument = (config: AppConfig, registry: ToolRegistry):
       title: 'Agent Tool Server for Azure',
       version: config.service.version,
       description:
-        'Backend connector that lets ChatGPT inspect, diagnose and perform a constrained set of ' +
-        'operational actions against an Azure environment. All access is scoped by the ' +
-        "connector's subscription and resource group allow-lists, and every state-changing " +
-        'action is gated behind explicit confirmation.',
+        'Backend tool server that lets an agent inspect, diagnose, operate and deploy to an Azure ' +
+        'environment through a constrained control plane. All access is scoped by the configured ' +
+        'subscription, resource group and management group allow-lists; every state-changing ' +
+        'action is gated behind an explicit preview and confirmation; and no shell, arbitrary ' +
+        'REST call or script execution is exposed.\n\n' +
+        SERVER_INSTRUCTIONS,
     },
     servers: [{ url: config.service.publicBaseUrl ?? `http://localhost:${config.http.port}` }],
     security: config.auth.mode === 'disabled' ? [] : [{ bearerAuth: [] }],

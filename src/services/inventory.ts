@@ -5,7 +5,14 @@ import type {
   Subscription,
 } from '../provider/types.js';
 import { escapeKqlString } from '../provider/azure/index.js';
+import type { AppConfig } from '../config/index.js';
 import type { Guardrails } from './guardrails.js';
+
+/** A subscription plus what the server's identities can actually do in it. */
+export interface SubscriptionCapability extends Subscription {
+  readonly readable: boolean;
+  readonly deployable: boolean;
+}
 
 export interface ResourceSearchInput {
   readonly subscriptionIds: readonly string[];
@@ -43,23 +50,98 @@ export interface RawGraphQueryResult {
 const PROJECTION =
   '| project id, name, type, location, resourceGroup, subscriptionId, kind, sku, tags';
 
+const READ_ACTION = 'Microsoft.Resources/subscriptions/resourceGroups/read';
+const DEPLOY_ACTION = 'Microsoft.Resources/deployments/write';
+
+/** ARM permission strings support a trailing `*` wildcard on each segment. */
+const matchesAction = (pattern: string, action: string): boolean => {
+  if (pattern === '*') return true;
+  const escaped = pattern
+    .split('*')
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('.*');
+  return new RegExp(`^${escaped}$`, 'i').test(action);
+};
+
 /**
  * Read-only inventory questions ("what exists in my environment?"). Structured search is expressed
  * as a generated KQL query so that user-supplied values are never concatenated unescaped.
  */
 export class InventoryService {
+  private readonly permissionCache = new Map<string, { value: boolean; expiresAt: number }>();
+
   public constructor(
     private readonly provider: AzureProvider,
     private readonly guardrails: Guardrails,
+    private readonly config: AppConfig,
+    private readonly now: () => number = () => Date.now(),
   ) {}
 
-  public async listSubscriptions(): Promise<readonly Subscription[]> {
+  public async listSubscriptions(): Promise<readonly SubscriptionCapability[]> {
     const subscriptions = await this.provider.listSubscriptions();
     const allowed = this.guardrails.allowedSubscriptionIds;
-    if (allowed.length === 0) return subscriptions;
-    return subscriptions.filter((subscription) =>
-      allowed.includes(subscription.subscriptionId.toLowerCase()),
-    );
+    const visible =
+      allowed.length === 0
+        ? subscriptions
+        : subscriptions.filter((subscription) =>
+            allowed.includes(subscription.subscriptionId.toLowerCase()),
+          );
+
+    return Promise.all(visible.map((subscription) => this.withCapabilities(subscription)));
+  }
+
+  /**
+   * Reports what the server can actually do in a subscription rather than what it can see.
+   *
+   * Resource Graph lists a subscription as soon as the identity has any read access, but a
+   * deployment needs write permission held by a *different* identity. Presenting a subscription as
+   * deployable when the deployment identity has no RBAC there would send an agent into a
+   * guaranteed 403 halfway through a plan.
+   */
+  private async withCapabilities(subscription: Subscription): Promise<SubscriptionCapability> {
+    const armScope = `/subscriptions/${subscription.subscriptionId}`;
+    const inDeploymentScope =
+      this.config.deployments.enabled &&
+      this.guardrails.allowedSubscriptionIds.includes(subscription.subscriptionId.toLowerCase());
+
+    if (!this.config.azure.verifyRbac) {
+      return { ...subscription, readable: true, deployable: inDeploymentScope };
+    }
+
+    const readable = await this.canPerform(armScope, 'operator', READ_ACTION);
+    const deployable = inDeploymentScope
+      ? await this.canPerform(armScope, 'deployment', DEPLOY_ACTION)
+      : false;
+    return { ...subscription, readable, deployable };
+  }
+
+  private async canPerform(
+    armScope: string,
+    identity: 'operator' | 'deployment',
+    action: string,
+  ): Promise<boolean> {
+    const key = `${identity}\u0000${armScope}\u0000${action}`;
+    const cached = this.permissionCache.get(key);
+    if (cached && cached.expiresAt > this.now()) return cached.value;
+
+    let value = false;
+    try {
+      const permissions = await this.provider.getEffectivePermissions(armScope, identity);
+      value = permissions.some(
+        (permission) =>
+          permission.actions.some((candidate) => matchesAction(candidate, action)) &&
+          !permission.notActions.some((candidate) => matchesAction(candidate, action)),
+      );
+    } catch {
+      // A scope the identity cannot even query permissions for is, by definition, not usable.
+      value = false;
+    }
+
+    this.permissionCache.set(key, {
+      value,
+      expiresAt: this.now() + this.config.azure.rbacCacheTtlMs,
+    });
+    return value;
   }
 
   public async listResourceGroups(subscriptionId: string): Promise<readonly ResourceGroup[]> {

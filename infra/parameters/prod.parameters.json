@@ -3,13 +3,45 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "environmentName": { "value": "prod" },
-    "location": { "value": "westeurope" },
-    "image": { "value": "REPLACE_WITH_ACR_LOGIN_SERVER/agent-tool-server-azure:REPLACE_WITH_TAG" },
-    "publicBaseUrl": { "value": "" },
-    "allowedSubscriptionIds": { "value": [] },
+
     "allowedResourceGroups": { "value": [] },
+    "allowedManagementGroupIds": { "value": [] },
+    "tenantDeploymentsEnabled": { "value": false },
+    "verifyRbac": { "value": true },
+
     "enableMutations": { "value": false },
     "mutationConfirmationRequired": { "value": true },
-    "logLevel": { "value": "info" }
+    "enableMcpHttp": { "value": true },
+
+    "enableDeployments": { "value": false },
+    "bicepCliPath": { "value": "/usr/local/bin/bicep" },
+    "bicepCliSha256": { "value": "" },
+    "bicepRemoteModulesEnabled": { "value": false },
+    "bicepAllowedRegistries": { "value": "" },
+    "bicepCompileTimeoutMs": { "value": 60000 },
+    "bicepMaxConcurrency": { "value": 2 },
+    "bicepMaxFiles": { "value": 64 },
+    "bicepMaxFileBytes": { "value": 262144 },
+    "bicepMaxTotalBytes": { "value": 1048576 },
+
+    "deploymentPreviewTtlMs": { "value": 900000 },
+    "deploymentMaxPreviewChanges": { "value": 200 },
+    "deploymentMaxConcurrent": { "value": 2 },
+
+    "maxBodyBytes": { "value": 4194304 },
+    "rateLimitMax": { "value": 120 },
+    "rateLimitWindowMs": { "value": 60000 },
+    "requestTimeoutMs": { "value": 30000 },
+    "shutdownGraceMs": { "value": 10000 },
+
+    "cpu": { "value": "0.5" },
+    "memory": { "value": "1Gi" },
+    "minReplicas": { "value": 0 },
+    "maxReplicas": { "value": 3 },
+    "httpConcurrentRequests": { "value": 20 },
+
+    "logLevel": { "value": "info" },
+    "enableHealthAlerts": { "value": false },
+    "tags": { "value": {} }
   }
 }

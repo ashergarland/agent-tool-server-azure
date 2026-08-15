@@ -10,6 +10,7 @@ import {
   webAppId,
 } from '../helpers/fake-provider.js';
 import type { Logger } from 'pino';
+import { Metrics } from '../../src/util/metrics.js';
 
 const setup = (overrides: Record<string, string> = {}) => {
   const provider = createFakeProvider({
@@ -29,6 +30,7 @@ const setup = (overrides: Record<string, string> = {}) => {
     provider,
     new Guardrails(testConfig(overrides)),
     logger as unknown as Logger,
+    new Metrics(),
   );
   return { provider, service, logger };
 };

@@ -47,7 +47,7 @@ export const mapAzureError = (error: unknown, context: string): AppError => {
     case 403:
       return new AppError(
         'forbidden',
-        `${context}: the connector identity is not authorized (${azureMessage})`,
+        `${context}: the server identity is not authorized (${azureMessage})`,
         { details, cause: error },
       );
     case 404:

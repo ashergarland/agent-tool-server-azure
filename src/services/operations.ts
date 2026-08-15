@@ -5,6 +5,7 @@ import {
   resourceGroupFromResourceId,
   subscriptionIdFromResourceId,
 } from '../provider/azure/index.js';
+import type { Metrics } from '../util/metrics.js';
 import type { Guardrails } from './guardrails.js';
 
 export interface OperationRequest {
@@ -12,6 +13,10 @@ export interface OperationRequest {
   readonly confirm: boolean;
   readonly dryRun: boolean;
   readonly reason?: string | undefined;
+  /** Audit context supplied by the transport. */
+  readonly principal?: string | undefined;
+  readonly requestId?: string | undefined;
+  readonly transport?: string | undefined;
 }
 
 export interface OperationResult {
@@ -49,6 +54,7 @@ export class OperationsService {
     private readonly provider: AzureProvider,
     private readonly guardrails: Guardrails,
     private readonly logger: Logger,
+    private readonly metrics: Metrics,
   ) {}
 
   private parseRef(resourceId: string): ResourceRef {
@@ -90,12 +96,19 @@ export class OperationsService {
       {
         event: 'azure.mutation',
         action,
+        principal: request.principal ?? 'unknown',
+        requestId: request.requestId ?? null,
+        transport: request.transport ?? null,
         resourceId: request.resourceId,
+        subscriptionId: subscriptionIdFromResourceId(request.resourceId) ?? null,
+        resourceGroup: resourceGroupFromResourceId(request.resourceId) ?? null,
         dryRun,
         reason: request.reason ?? null,
+        timestamp: new Date().toISOString(),
       },
       dryRun ? 'planned Azure mutation (dry run)' : 'executed Azure mutation',
     );
+    this.metrics.increment('mutations_total', { action, dryRun: String(dryRun) });
   }
 
   private async run(
@@ -104,7 +117,9 @@ export class OperationsService {
     execute: (ref: ResourceRef) => Promise<void>,
   ): Promise<OperationResult> {
     const { ref, dryRun } = await this.prepare(action, request);
-    if (!dryRun) await execute(ref);
+    if (!dryRun) {
+      await this.metrics.time('azure_mutation_ms', { action }, () => execute(ref));
+    }
     this.audit(action, request, dryRun);
 
     return {

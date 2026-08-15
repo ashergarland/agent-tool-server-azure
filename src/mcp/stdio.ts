@@ -1,14 +1,31 @@
+import { randomUUID } from 'node:crypto';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createApplication } from '../app.js';
 import { createMcpServer } from './server.js';
 
 /**
- * Entry point for running the connector as a local MCP server (`npm run mcp:stdio`).
+ * Entry point for running the server as a local MCP server over stdio (`npm run mcp:stdio`).
  * Logs go to stderr so that stdout stays a clean JSON-RPC channel.
+ *
+ * The caller here is the local operating system user, who already holds whatever Azure credentials
+ * `DefaultAzureCredential` finds. There is no second authentication step to perform, and the
+ * process-level allow-lists still apply.
  */
 const main = async (): Promise<void> => {
-  const { config, registry, services, logger } = createApplication();
-  const server = createMcpServer(config, registry, services);
+  const app = createApplication();
+  const { config, registry, services, logger } = app;
+
+  const server = createMcpServer(config, registry, services, {
+    transport: 'mcp-stdio',
+    context: () => ({ requestId: randomUUID(), principal: 'stdio:local' }),
+  });
+
+  const shutdown = (): void => {
+    void server.close().finally(() => process.exit(0));
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+
   await server.connect(new StdioServerTransport());
   logger.info({ tools: registry.list().length }, 'MCP stdio server connected');
 };

@@ -6,9 +6,25 @@ const SHUTDOWN_SIGNALS = ['SIGINT', 'SIGTERM'] as const;
 const main = async (): Promise<void> => {
   const app = createApplication();
   const { config, logger, http } = app;
+  let shuttingDown = false;
 
+  /**
+   * Graceful drain. Container Apps sends SIGTERM and then waits before killing the container, so
+   * the correct behaviour is to stop accepting new connections and let in-flight tool calls
+   * finish. A deployment that is mid-flight in ARM is unaffected either way — it was started with
+   * a fire-and-forget PUT precisely so that a restart cannot orphan it.
+   */
   const shutdown = async (signal: string): Promise<void> => {
-    logger.info({ signal }, 'shutting down');
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info({ signal, graceMs: config.http.shutdownGraceMs }, 'draining');
+
+    const forced = setTimeout(() => {
+      logger.warn('drain timed out; exiting anyway');
+      process.exit(0);
+    }, config.http.shutdownGraceMs);
+    forced.unref();
+
     try {
       await http.close();
       logger.info('shutdown complete');
@@ -39,6 +55,8 @@ const main = async (): Promise<void> => {
       port: config.http.port,
       authMode: config.auth.mode,
       mutationsEnabled: config.guardrails.mutationsEnabled,
+      deploymentsEnabled: config.deployments.enabled,
+      mcpHttpEnabled: config.mcp.httpEnabled,
       scopedSubscriptions: config.azure.allowedSubscriptionIds.length,
     },
     'agent-tool-server-azure listening',

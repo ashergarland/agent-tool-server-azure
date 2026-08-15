@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Weekly, so a vulnerability disclosed after a merge still fails a build somewhere.
+    - cron: '17 4 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -18,7 +21,7 @@ env:
 
 jobs:
   verify:
-    name: Lint, typecheck and test
+    name: Format, lint, typecheck, test, build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +43,7 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
+      - name: Test with coverage thresholds
         run: npm run test:coverage
 
       - name: Build
@@ -49,14 +52,34 @@ jobs:
       - name: Emit OpenAPI document
         run: npm run openapi:emit -- openapi.json
 
+      - name: Check the OpenAPI document is valid and complete
+        run: npm run openapi:check openapi.json
+
       - name: Upload OpenAPI document
         uses: actions/upload-artifact@v4
         with:
           name: openapi
           path: openapi.json
 
+  metadata:
+    name: Registry metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate server.json against the published MCP schema
+        run: npm run metadata:check
+
   docker:
-    name: Build container image
+    name: Container image
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -70,23 +93,104 @@ jobs:
           tags: agent-tool-server-azure:ci
           build-args: |
             GIT_SHA=${{ github.sha }}
+            SERVICE_VERSION=ci
 
-      - name: Smoke test the image
+      - name: Verify the image runs as a non-root user
+        run: |
+          uid="$(docker run --rm --entrypoint id agent-tool-server-azure:ci -u)"
+          echo "container uid: $uid"
+          test "$uid" != "0"
+
+      - name: Verify the pinned Bicep CLI is present, executable and read-only
+        run: |
+          perms="$(docker run --rm --entrypoint stat agent-tool-server-azure:ci -c '%a %U' /usr/local/bin/bicep)"
+          echo "bicep: $perms"
+          test "$perms" = "555 root"
+          echo "recorded digest: $(docker run --rm --entrypoint cat agent-tool-server-azure:ci /usr/local/share/bicep.sha256)"
+
+      - name: Verify the Bicep CLI actually compiles as the runtime user
+        run: |
+          # --version alone would miss a compiler that starts but cannot do real work. Compiling a
+          # template with interpolation and a culture-aware function exercises the globalization
+          # stack that a self-contained .NET binary depends on.
+          docker run --rm --entrypoint /usr/local/bin/bicep agent-tool-server-azure:ci --version
+          cat > /tmp/main.bicep <<'BICEP'
+          param prefix string = 'atsa'
+          var name = '${prefix}-example'
+          output resourceName string = toUpper(name)
+          BICEP
+          docker run --rm -i --entrypoint sh agent-tool-server-azure:ci \
+            -c 'cat > /tmp/main.bicep && /usr/local/bin/bicep build /tmp/main.bicep --stdout' \
+            < /tmp/main.bicep | tee /tmp/compiled.json
+          grep -q 'deploymentTemplate.json' /tmp/compiled.json
+          grep -q 'resourceName' /tmp/compiled.json
+
+      - name: Verify the server reports the compiler as ready when deployments are enabled
+        env:
+          API_KEY: ci-readiness-key-that-is-long-enough-000
+        run: |
+          docker run -d --name deployable -p 8081:8080 \
+            -e NODE_ENV=development \
+            -e API_KEYS="$API_KEY" \
+            -e DEPLOYMENTS_ENABLED=true \
+            agent-tool-server-azure:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://localhost:8081/health > /dev/null; then break; fi
+            sleep 1
+          done
+          # Capture the body whatever the status: curl -f would discard exactly the report needed to
+          # explain a failure.
+          status="$(curl -sS -o /tmp/ready-deployable.json -w '%{http_code}' http://localhost:8081/ready)"
+          echo "GET /ready -> $status"
+          cat /tmp/ready-deployable.json
+          docker logs deployable
+          docker rm -f deployable
+          # Assert through the readiness report an operator actually relies on, not just against the
+          # binary: a compiler that cannot start must never read as ready.
+          state="$(jq -r '.components.bicepCompiler.state' /tmp/ready-deployable.json)"
+          echo "bicepCompiler: $state ($(jq -r '.components.bicepCompiler.detail' /tmp/ready-deployable.json))"
+          case "$state" in
+            ok|degraded) ;;
+            *) echo "the Bicep compiler is not usable in this image"; exit 1 ;;
+          esac
+          test "$status" = "200"
+          test "$(jq -r '.ready' /tmp/ready-deployable.json)" = "true"
+
+      - name: Verify the stdio MCP entry point starts and lists tools
+        run: |
+          printf '%s\n%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+            | docker run --rm -i \
+                -e NODE_ENV=development -e AUTH_MODE=disabled -e LOG_LEVEL=silent \
+                --entrypoint node agent-tool-server-azure:ci dist/mcp/stdio.js \
+            | tee /tmp/mcp.jsonl
+          grep -q 'azure_list_subscriptions' /tmp/mcp.jsonl
+          grep -q 'azure_validate_bicep' /tmp/mcp.jsonl
+
+      - name: Smoke test the HTTP surface
         env:
           API_KEY: ci-smoke-test-key-that-is-long-enough
         run: |
-          docker run -d --name connector -p 8080:8080 \
+          docker run -d --name server -p 8080:8080 \
             -e API_KEYS="$API_KEY" \
             agent-tool-server-azure:ci
-          for _ in $(seq 1 20); do
+          for _ in $(seq 1 30); do
             if curl -fsS http://localhost:8080/health > /dev/null; then break; fi
             sleep 1
           done
           curl -fsS http://localhost:8080/health
           curl -fsS http://localhost:8080/version
+          curl -fsS http://localhost:8080/ready | tee /tmp/ready.json
+          grep -q '"ready":true' /tmp/ready.json
           curl -fsS -H "x-api-key: $API_KEY" http://localhost:8080/tools > /dev/null
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/tools)" = "401"
-          docker rm -f connector
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/mcp)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/metrics)" = "401"
+          docker logs server 2>&1 | tee /tmp/server.log
+          # A leaked key in the logs is a security failure, not a cosmetic one.
+          ! grep -q "$API_KEY" /tmp/server.log
+          docker rm -f server
 
   infra:
     name: Validate Bicep
@@ -97,7 +201,7 @@ jobs:
       - name: Build Bicep templates
         run: |
           az bicep install
-          az bicep build --file infra/main.bicep --stdout > /dev/null
+          az bicep build --file infra/main.bicep --outfile /tmp/main.json
 
       - name: Lint Bicep templates
         run: |
@@ -105,3 +209,76 @@ jobs:
             echo "Linting $template"
             az bicep lint --file "$template"
           done
+
+      - name: Check parameter files against the template
+        run: |
+          for file in infra/parameters/*.parameters.json; do
+            echo "Checking $file"
+            python3 - "$file" <<'PY'
+          import json, sys
+          template = json.load(open('/tmp/main.json'))
+          declared = set(template.get('parameters', {}))
+          supplied = set(json.load(open(sys.argv[1]))['parameters'])
+          unknown = sorted(supplied - declared)
+          if unknown:
+              sys.exit(f"{sys.argv[1]} sets parameters the template does not declare: {unknown}")
+          PY
+          done
+
+  shell:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck --severity=warning scripts/lib/*.sh scripts/bootstrap/*.sh
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan the working tree and history for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-and-quality
+
+      - uses: github/codeql-action/analyze@v3
