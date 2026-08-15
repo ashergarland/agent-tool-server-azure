@@ -37,6 +37,11 @@ Follow this procedure.
    change, including deletions. Wait for explicit approval. Only then call again with confirm=true
    and a short reason. Afterwards verify with a read tool or azure_get_deployment.
 
+   Verify a deployment with azure_get_deployment, not with azure_search_resources. Resource Graph is
+   eventually consistent and lags ARM by minutes, so a resource you just created will often not
+   appear in a search yet. A search miss immediately after a deployment means "not indexed yet", not
+   "not created" — check the deployment itself before concluding anything failed.
+
 Deployments have one extra rule: azure_deploy_bicep only accepts a confirmation hash produced by a
 recent azure_what_if_bicep over the identical source, parameters, scope and mode. If anything
 changed, re-run the preview and show the user the new plan. Rollback re-deploys a stored previous

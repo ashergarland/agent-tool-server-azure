@@ -391,6 +391,15 @@ Bicep compiler and a real ARM what-if, and asserts that the security boundary ho
 infrastructure. It is strictly non-mutating: mutations stay disabled, and what-if predicts a change
 set without creating anything.
 
+A second harness covers the two paths a stub cannot reach — the real ARM deployment PUT and the
+Azure Table record store. **This one creates resources**, so point it at a scratch resource group
+and delete that group afterwards:
+
+```bash
+npm run verify:live-deploy -- <subscription-id> <scratch-resource-group> <table-endpoint>
+az group delete --name <scratch-resource-group> --yes
+```
+
 Docker:
 
 ```bash

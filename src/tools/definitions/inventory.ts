@@ -80,7 +80,9 @@ export const searchResourcesTool = defineTool({
   description:
     'Structured, safe search over Azure Resource Graph. The filters are compiled into an escaped ' +
     'query server-side, so user-supplied text can never alter the query shape. This is the ' +
-    'default way to find a resource and the fastest route to a fully qualified ARM resource id.',
+    'default way to find a resource and the fastest route to a fully qualified ARM resource id. ' +
+    'Resource Graph is eventually consistent and lags ARM by minutes, so a resource created very ' +
+    'recently may not appear here yet.',
   kind: 'read',
   routing: {
     useWhen: [
@@ -92,6 +94,8 @@ export const searchResourcesTool = defineTool({
       'The question needs an aggregation — summarize, count or grouped totals across resource ' +
         'types — which filters cannot express; use azure_run_graph_query instead.',
       'You already have the exact ARM resource id — use azure_get_resource.',
+      'You are checking whether a deployment you just ran succeeded — use azure_get_deployment, ' +
+        'because a freshly created resource may not be indexed here yet.',
     ],
     requiredScope: 'Read access to the searched subscriptions.',
     changesState: false,
