@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createToolRegistry } from '../../src/tools/registry.js';
-import { toolDefinitions, type ToolDefinition } from '../../src/tools/definitions.js';
+import { toolDefinitions } from '../../src/tools/definitions/index.js';
+import type { ToolDefinition } from '../../src/tools/types.js';
 import { createServices } from '../../src/services/index.js';
 import { testConfig } from '../helpers/config.js';
 import { createFakeProvider, createTestLogger } from '../helpers/fake-provider.js';
 import type { Logger } from 'pino';
 
-const context = { requestId: 'req-1', principal: 'test' };
+const context = { requestId: 'req-1', principal: 'test', transport: 'http' } as const;
 
 const buildServices = (overrides: Record<string, string> = {}) => {
   const provider = createFakeProvider();
@@ -49,6 +50,8 @@ describe('ToolRegistry', () => {
       'azure_start_virtual_machine',
       'azure_restart_web_app',
       'azure_tag_resource',
+      'azure_deploy_bicep',
+      'azure_rollback_deployment',
     ]);
   });
 

@@ -9,8 +9,14 @@ import { AppError, notFound } from '../../errors.js';
 import type {
   ActivityLogEntry,
   ActivityLogQueryInput,
+  ArmDeploymentOperationPage,
+  ArmDeploymentRequest,
+  ArmDeploymentStatus,
+  ArmWhatIfResult,
   AzureProvider,
   AzureResource,
+  DeploymentScope,
+  EffectivePermission,
   MetricSeries,
   MetricsQueryInput,
   ResourceGraphPage,
@@ -20,7 +26,8 @@ import type {
   Subscription,
 } from '../types.js';
 import { ArmRestClient } from './arm-rest.js';
-import { createAzureCredential } from './credential.js';
+import { createAzureCredentials, type AzureCredentials } from './credential.js';
+import { ArmDeploymentClient } from './deployments.js';
 import { mapAzureError } from './errors.js';
 
 const ACTIVITY_LOG_API_VERSION = '2015-04-01';
@@ -105,17 +112,36 @@ export class AzureSdkProvider implements AzureProvider {
   private readonly graphClient: ResourceGraphClient;
   private readonly metricsClient: MetricsQueryClient;
   private readonly armRest: ArmRestClient;
+  private readonly credential: TokenCredential;
+  private readonly operatorDeployments: ArmDeploymentClient;
+  private readonly deploymentDeployments: ArmDeploymentClient;
 
   public constructor(
-    private readonly credential: TokenCredential,
+    credentials: AzureCredentials,
     private readonly config: AppConfig,
   ) {
+    this.credential = credentials.operator;
     this.graphClient = new ResourceGraphClient(this.credential);
     this.metricsClient = new MetricsQueryClient(this.credential);
     this.armRest = new ArmRestClient(
       this.credential,
       this.config.azure.armEndpoint,
       this.config.http.requestTimeoutMs,
+    );
+
+    const deploymentOptions = {
+      whatIfTimeoutMs: this.config.deployments.whatIfTimeoutMs,
+      pollIntervalMs: this.config.deployments.pollIntervalMs,
+      armEndpoint: this.config.azure.armEndpoint,
+    };
+    this.operatorDeployments = new ArmDeploymentClient(this.armRest, deploymentOptions);
+    this.deploymentDeployments = new ArmDeploymentClient(
+      new ArmRestClient(
+        credentials.deployment,
+        this.config.azure.armEndpoint,
+        this.config.http.requestTimeoutMs,
+      ),
+      deploymentOptions,
     );
   }
 
@@ -341,6 +367,42 @@ export class AzureSdkProvider implements AzureProvider {
 
     return this.getResourceById(resourceId);
   }
+
+  /* ----------------------------------------------------------- deployments */
+
+  public getEffectivePermissions(
+    armScope: string,
+    identity: 'operator' | 'deployment',
+  ): Promise<readonly EffectivePermission[]> {
+    return this.clientFor(identity).effectivePermissions(armScope);
+  }
+
+  public whatIfDeployment(request: ArmDeploymentRequest): Promise<ArmWhatIfResult> {
+    return this.deploymentDeployments.whatIf(request);
+  }
+
+  public beginDeployment(request: ArmDeploymentRequest): Promise<ArmDeploymentStatus> {
+    return this.deploymentDeployments.begin(request);
+  }
+
+  public getDeployment(
+    scope: DeploymentScope,
+    deploymentName: string,
+  ): Promise<ArmDeploymentStatus> {
+    return this.deploymentDeployments.get(scope, deploymentName);
+  }
+
+  public listDeploymentOperations(
+    scope: DeploymentScope,
+    deploymentName: string,
+    options: { readonly top: number; readonly skipToken: string | undefined },
+  ): Promise<ArmDeploymentOperationPage> {
+    return this.deploymentDeployments.listOperations(scope, deploymentName, options);
+  }
+
+  private clientFor(identity: 'operator' | 'deployment'): ArmDeploymentClient {
+    return identity === 'deployment' ? this.deploymentDeployments : this.operatorDeployments;
+  }
 }
 
 /** Escape a value that will be embedded inside a single-quoted KQL string literal. */
@@ -348,4 +410,4 @@ export const escapeKqlString = (value: string): string =>
   value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
 export const createAzureProvider = (config: AppConfig): AzureProvider =>
-  new AzureSdkProvider(createAzureCredential(config), config);
+  new AzureSdkProvider(createAzureCredentials(config), config);

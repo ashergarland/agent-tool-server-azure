@@ -92,6 +92,88 @@ export interface ResourceRef {
   readonly name: string;
 }
 
+/* ------------------------------------------------------------- deployments */
+
+export type DeploymentScopeKind = 'resourceGroup' | 'subscription' | 'managementGroup' | 'tenant';
+
+/**
+ * A validated ARM deployment scope. Exactly the fields the scope kind requires are populated, and
+ * `armScope` is the canonical ARM path the REST calls are issued against.
+ */
+export interface DeploymentScope {
+  readonly kind: DeploymentScopeKind;
+  readonly subscriptionId: string | undefined;
+  readonly resourceGroup: string | undefined;
+  readonly managementGroupId: string | undefined;
+  /** Required by subscription, management group and tenant deployments. */
+  readonly location: string | undefined;
+  /** e.g. `/subscriptions/{id}/resourceGroups/{rg}` or `/` for tenant. */
+  readonly armScope: string;
+}
+
+export interface ArmDeploymentRequest {
+  readonly scope: DeploymentScope;
+  readonly deploymentName: string;
+  readonly template: Record<string, unknown>;
+  /** ARM parameter object form: `{ name: { value } }`. */
+  readonly parameters: Record<string, unknown>;
+  readonly signal?: AbortSignal | undefined;
+}
+
+export interface ArmPropertyChange {
+  readonly path: string;
+  readonly propertyChangeType: string;
+  readonly before: unknown;
+  readonly after: unknown;
+}
+
+export interface ArmWhatIfChange {
+  readonly changeType: string;
+  readonly resourceId: string;
+  readonly unsupportedReason: string | undefined;
+  readonly propertyChanges: readonly ArmPropertyChange[];
+}
+
+export interface ArmWhatIfResult {
+  readonly status: string;
+  readonly changes: readonly ArmWhatIfChange[];
+  readonly error: { readonly code: string; readonly message: string } | undefined;
+}
+
+export interface ArmDeploymentStatus {
+  readonly id: string;
+  readonly name: string;
+  readonly provisioningState: string;
+  readonly correlationId: string | undefined;
+  readonly timestamp: string | undefined;
+  readonly duration: string | undefined;
+  readonly outputs: Record<string, unknown> | undefined;
+  readonly error: { readonly code: string; readonly message: string } | undefined;
+}
+
+export interface ArmDeploymentOperation {
+  readonly operationId: string;
+  readonly provisioningState: string | undefined;
+  readonly timestamp: string | undefined;
+  readonly duration: string | undefined;
+  readonly resourceType: string | undefined;
+  readonly resourceName: string | undefined;
+  readonly targetResourceId: string | undefined;
+  readonly statusCode: string | undefined;
+  readonly statusMessage: string | undefined;
+}
+
+export interface ArmDeploymentOperationPage {
+  readonly operations: readonly ArmDeploymentOperation[];
+  readonly skipToken: string | undefined;
+}
+
+/** Effective permissions of the calling identity at an ARM scope. */
+export interface EffectivePermission {
+  readonly actions: readonly string[];
+  readonly notActions: readonly string[];
+}
+
 export interface AzureProvider {
   listSubscriptions(): Promise<readonly Subscription[]>;
   listResourceGroups(subscriptionId: string): Promise<readonly ResourceGroup[]>;
@@ -107,4 +189,23 @@ export interface AzureProvider {
     resourceId: string,
     tags: Readonly<Record<string, string>>,
   ): Promise<AzureResource>;
+
+  /**
+   * Effective permissions of an identity at a scope. `identity` selects which configured managed
+   * identity is asked: the read/operator identity or the separate deployment identity.
+   */
+  getEffectivePermissions(
+    armScope: string,
+    identity: 'operator' | 'deployment',
+  ): Promise<readonly EffectivePermission[]>;
+
+  whatIfDeployment(request: ArmDeploymentRequest): Promise<ArmWhatIfResult>;
+  /** Starts the deployment and returns immediately; callers poll with {@link getDeployment}. */
+  beginDeployment(request: ArmDeploymentRequest): Promise<ArmDeploymentStatus>;
+  getDeployment(scope: DeploymentScope, deploymentName: string): Promise<ArmDeploymentStatus>;
+  listDeploymentOperations(
+    scope: DeploymentScope,
+    deploymentName: string,
+    options: { readonly top: number; readonly skipToken: string | undefined },
+  ): Promise<ArmDeploymentOperationPage>;
 }

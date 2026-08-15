@@ -7,8 +7,9 @@ import type { ResourceGraphQueryInput } from '../../src/provider/types.js';
 
 const setup = (overrides: Record<string, string> = {}) => {
   const provider = createFakeProvider();
-  const guardrails = new Guardrails(testConfig(overrides));
-  return { provider, service: new InventoryService(provider, guardrails) };
+  const config = testConfig(overrides);
+  const guardrails = new Guardrails(config);
+  return { provider, service: new InventoryService(provider, guardrails, config) };
 };
 
 const lastQuery = (provider: ReturnType<typeof createFakeProvider>): ResourceGraphQueryInput =>

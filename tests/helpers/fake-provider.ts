@@ -1,8 +1,12 @@
 import { vi } from 'vitest';
 import type {
   ActivityLogEntry,
+  ArmDeploymentOperationPage,
+  ArmDeploymentStatus,
+  ArmWhatIfResult,
   AzureProvider,
   AzureResource,
+  EffectivePermission,
   MetricSeries,
   ResourceGraphPage,
   ResourceGroup,
@@ -87,6 +91,39 @@ export const createFakeProvider = (overrides: Partial<AzureProvider> = {}): Fake
     restartWebApp: record<void>('restartWebApp', () => undefined),
     setResourceTags: record<AzureResource>('setResourceTags', () =>
       makeResource({ tags: { owner: 'platform' } }),
+    ),
+    getEffectivePermissions: record<readonly EffectivePermission[]>(
+      'getEffectivePermissions',
+      () => [{ actions: ['*'], notActions: [] }],
+    ),
+    whatIfDeployment: record<ArmWhatIfResult>('whatIfDeployment', () => ({
+      status: 'Succeeded',
+      changes: [],
+      error: undefined,
+    })),
+    beginDeployment: record<ArmDeploymentStatus>('beginDeployment', () => ({
+      id: '/subscriptions/x/providers/Microsoft.Resources/deployments/test',
+      name: 'test',
+      provisioningState: 'Accepted',
+      correlationId: 'correlation',
+      timestamp: undefined,
+      duration: undefined,
+      outputs: undefined,
+      error: undefined,
+    })),
+    getDeployment: record<ArmDeploymentStatus>('getDeployment', () => ({
+      id: '/subscriptions/x/providers/Microsoft.Resources/deployments/test',
+      name: 'test',
+      provisioningState: 'Succeeded',
+      correlationId: 'correlation',
+      timestamp: '2026-01-01T00:00:00Z',
+      duration: 'PT1M',
+      outputs: undefined,
+      error: undefined,
+    })),
+    listDeploymentOperations: record<ArmDeploymentOperationPage>(
+      'listDeploymentOperations',
+      () => ({ operations: [], skipToken: undefined }),
     ),
   };
 
