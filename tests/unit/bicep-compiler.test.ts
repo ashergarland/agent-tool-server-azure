@@ -120,6 +120,22 @@ describe('CliBicepCompiler', () => {
     expect(info).toMatchObject({ available: false, detail: 'BICEP_CLI_PATH is not configured' });
   });
 
+  it('probes the version in a writable scratch directory, not the working directory', async () => {
+    // scrubbedEnv points HOME and TMPDIR at whatever directory it is given. A container's working
+    // directory is normally root-owned, and a self-contained .NET binary that cannot write to its
+    // temporary directory aborts — which would report a working compiler as unavailable.
+    const runner = runnerFor(() => processResult({ stdout: '0.30.0\n' }));
+    const info = await compilerFor(runner).describe();
+    expect(info.available).toBe(true);
+
+    const probe = runner.requests.find((request) => request.args[0] === '--version');
+    expect(probe?.cwd).not.toBe(process.cwd());
+    expect(probe?.cwd).toMatch(/atsa-bicep-probe-/);
+    expect(probe?.env['HOME']).toBe(probe?.cwd);
+    expect(probe?.env['TMPDIR']).toBe(probe?.cwd);
+    expect(existsSync(probe?.cwd ?? '')).toBe(false);
+  });
+
   it('invokes the pinned binary with no shell and a scrubbed environment', async () => {
     const runner = runnerFor(() => processResult({ stdout: JSON.stringify(RG_TEMPLATE) }));
     const result = await compilerFor(runner).compile({ bundle: bundle() });

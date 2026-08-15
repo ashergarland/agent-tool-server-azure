@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, constants } from 'node:fs/promises';
-import { relative, sep } from 'node:path';
+import { access, constants, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, relative, sep } from 'node:path';
 import { AppError, internalError } from '../errors.js';
 import { Semaphore } from '../util/semaphore.js';
 import { withMaterializedBundle, type MaterializedBundle } from './materialize.js';
@@ -201,16 +202,27 @@ export class CliBicepCompiler implements BicepCompiler {
       checksumVerified = true;
     }
 
-    const result = await this.runner.run({
-      command: this.config.cliPath,
-      args: ['--version'],
-      cwd: process.cwd(),
-      env: scrubbedEnv(process.cwd()),
-      timeoutMs: Math.min(this.config.timeoutMs, 15_000),
-      maxOutputBytes: 4096,
-      uid: this.config.runAsUid,
-      gid: this.config.runAsGid,
-    });
+    // The probe runs in a fresh writable directory rather than the process working directory.
+    // scrubbedEnv points HOME and TMPDIR at whatever it is given, and the working directory of a
+    // container image is typically root-owned: a self-contained .NET binary that cannot write to
+    // its temporary directory aborts before it can print a version, which would report a perfectly
+    // good compiler as unavailable.
+    const probeRoot = await mkdtemp(join(await realpath(tmpdir()), 'atsa-bicep-probe-'));
+    let result;
+    try {
+      result = await this.runner.run({
+        command: this.config.cliPath,
+        args: ['--version'],
+        cwd: probeRoot,
+        env: scrubbedEnv(probeRoot),
+        timeoutMs: Math.min(this.config.timeoutMs, 15_000),
+        maxOutputBytes: 4096,
+        uid: this.config.runAsUid,
+        gid: this.config.runAsGid,
+      });
+    } finally {
+      await rm(probeRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
 
     if (result.exitCode !== 0) {
       return {

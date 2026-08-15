@@ -138,7 +138,12 @@ jobs:
             if curl -fsS http://localhost:8081/health > /dev/null; then break; fi
             sleep 1
           done
-          curl -fsS http://localhost:8081/ready | tee /tmp/ready-deployable.json
+          # Capture the body whatever the status: curl -f would discard exactly the report needed to
+          # explain a failure.
+          status="$(curl -sS -o /tmp/ready-deployable.json -w '%{http_code}' http://localhost:8081/ready)"
+          echo "GET /ready -> $status"
+          cat /tmp/ready-deployable.json
+          docker logs deployable
           docker rm -f deployable
           # Assert through the readiness report an operator actually relies on, not just against the
           # binary: a compiler that cannot start must never read as ready.
@@ -148,6 +153,7 @@ jobs:
             ok|degraded) ;;
             *) echo "the Bicep compiler is not usable in this image"; exit 1 ;;
           esac
+          test "$status" = "200"
           test "$(jq -r '.ready' /tmp/ready-deployable.json)" = "true"
 
       - name: Verify the stdio MCP entry point starts and lists tools
