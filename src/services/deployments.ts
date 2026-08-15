@@ -3,6 +3,7 @@ import type { Logger } from 'pino';
 import type { AppConfig } from '../config/index.js';
 import { badRequest, conflict, notFound } from '../errors.js';
 import {
+  assertModuleReferencesAllowed,
   computeConfirmationHash,
   hashJson,
   inspectTemplate,
@@ -190,6 +191,10 @@ export class DeploymentService {
     inspection: TemplateInspection | undefined;
   }> {
     const bundle = normalizeBundle(bundleInput, this.deps.config.bicep.bundleLimits);
+    // Module policy is enforced here, in the policy layer, rather than only inside the CLI adapter.
+    // A different compiler adapter must not be able to widen what a caller may reference.
+    assertModuleReferencesAllowed(bundle, this.deps.config.bicep.modulePolicy);
+
     const compiled = await this.deps.metrics.time('bicep_compile_ms', {}, () =>
       this.deps.compiler.compile({ bundle }),
     );

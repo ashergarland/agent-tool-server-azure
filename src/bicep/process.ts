@@ -86,7 +86,6 @@ export class NodeProcessRunner implements ProcessRunner {
       const kill = (): void => {
         if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
       };
-
       const timer = setTimeout(() => {
         timedOut = true;
         kill();
@@ -108,10 +107,11 @@ export class NodeProcessRunner implements ProcessRunner {
 
       child.stdout.on('data', (chunk: Buffer) => {
         stdout.push(chunk);
-        if (stdout.truncated && stderr.truncated) kill();
+        if (stdout.truncated) kill();
       });
       child.stderr.on('data', (chunk: Buffer) => {
         stderr.push(chunk);
+        if (stderr.truncated) kill();
       });
 
       child.on('error', (error) => {
