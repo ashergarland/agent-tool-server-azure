@@ -110,14 +110,20 @@ jobs:
 
       - name: Verify the Bicep CLI actually compiles as the runtime user
         run: |
-          # --version alone would miss a compiler that starts but cannot do real work, and
-          # compiling exercises the globalization stack a self-contained .NET binary depends on.
+          # --version alone would miss a compiler that starts but cannot do real work. Compiling a
+          # template with interpolation and a culture-aware function exercises the globalization
+          # stack that a self-contained .NET binary depends on.
           docker run --rm --entrypoint /usr/local/bin/bicep agent-tool-server-azure:ci --version
-          docker run --rm --entrypoint sh agent-tool-server-azure:ci -c '
-            printf "param name string = \"example\"\noutput greeting string = \"hello \${name}\"\n" > /tmp/main.bicep
-            /usr/local/bin/bicep build /tmp/main.bicep --stdout
-          ' | tee /tmp/compiled.json
+          cat > /tmp/main.bicep <<'BICEP'
+          param prefix string = 'atsa'
+          var name = '${prefix}-example'
+          output resourceName string = toUpper(name)
+          BICEP
+          docker run --rm -i --entrypoint sh agent-tool-server-azure:ci \
+            -c 'cat > /tmp/main.bicep && /usr/local/bin/bicep build /tmp/main.bicep --stdout' \
+            < /tmp/main.bicep | tee /tmp/compiled.json
           grep -q 'deploymentTemplate.json' /tmp/compiled.json
+          grep -q 'resourceName' /tmp/compiled.json
 
       - name: Verify the server reports the compiler as ready when deployments are enabled
         env:
