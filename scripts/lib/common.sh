@@ -10,7 +10,27 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# Git Bash and Cygwin hand POSIX paths like /c/Users/... to bash, but the Azure CLI is a native
+# Windows program that reads those as C:\c\Users\... Convert once, here, into a mixed form
+# (C:/Users/...) that both bash builtins and native programs understand. On Linux and macOS there is
+# no cygpath and the path is already correct, so this is a no-op.
+if command -v cygpath >/dev/null 2>&1; then
+  REPO_ROOT="$(cygpath -m "${REPO_ROOT}")"
+fi
 readonly REPO_ROOT
+
+# The same translation layer rewrites any argument that looks like an absolute POSIX path, which
+# corrupts ARM resource ids such as /subscriptions/<id>/... Prefix an az call that takes one of
+# those with this to turn the rewriting off for that call only. Empty, and therefore harmless,
+# everywhere else.
+if [[ -n "${MSYSTEM:-}" ]] || command -v cygpath >/dev/null 2>&1; then
+  ARM_ID_SAFE=(env MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*')
+else
+  ARM_ID_SAFE=()
+fi
+# shellcheck disable=SC2034  # consumed by the scripts that source this file, not by this file
+readonly ARM_ID_SAFE
 
 log() { printf '==> %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
