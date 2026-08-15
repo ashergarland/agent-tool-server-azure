@@ -15,7 +15,7 @@ export interface ArmResponse<T> {
   readonly headers: Readonly<Record<string, string>>;
 }
 
-const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 /**
  * Reads a response body while counting bytes, aborting as soon as the limit is exceeded.
@@ -68,6 +68,7 @@ export class ArmRestClient {
     private readonly credential: TokenCredential,
     private readonly endpoint: string,
     private readonly defaultTimeoutMs: number,
+    private readonly maxResponseBytes: number = DEFAULT_MAX_RESPONSE_BYTES,
   ) {}
 
   private async authorizationHeader(): Promise<string> {
@@ -109,7 +110,7 @@ export class ArmRestClient {
         signal: controller.signal,
       });
 
-      const raw = await readBounded(response, MAX_RESPONSE_BYTES);
+      const raw = await readBounded(response, this.maxResponseBytes);
       let body: unknown;
       try {
         body = raw.length === 0 ? undefined : JSON.parse(raw);
