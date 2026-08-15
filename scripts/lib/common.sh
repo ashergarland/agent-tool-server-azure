@@ -24,6 +24,8 @@ readonly REPO_ROOT
 # corrupts ARM resource ids such as /subscriptions/<id>/... Prefix an az call that takes one of
 # those with this to turn the rewriting off for that call only. Empty, and therefore harmless,
 # everywhere else.
+#
+# shellcheck disable=SC2034  # consumed by the scripts that source this file, not by this file
 if [[ -n "${MSYSTEM:-}" ]] || command -v cygpath >/dev/null 2>&1; then
   ARM_ID_SAFE=(env MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*')
 else
