@@ -60,10 +60,10 @@ DEPLOY_ROLE_ID="$(read_output deploymentRunnerRoleDefinitionId)"
 # Grant the operator the secrets role and wait for it to propagate.
 CALLER_ID="$(az ad signed-in-user show --query id --output tsv)"
 VAULT_ID="$(az keyvault show --name "${KEY_VAULT}" --resource-group "${RESOURCE_GROUP}" --query id --output tsv)"
-if ! az role assignment list --assignee "${CALLER_ID}" --scope "${VAULT_ID}" \
+if ! "${ARM_ID_SAFE[@]}" az role assignment list --assignee "${CALLER_ID}" --scope "${VAULT_ID}" \
   --query "[?roleDefinitionName=='Key Vault Secrets Officer'] | [0]" --output tsv | grep -q .; then
   log "Granting the current user Key Vault Secrets Officer on ${KEY_VAULT}"
-  az role assignment create \
+  "${ARM_ID_SAFE[@]}" az role assignment create \
     --assignee-object-id "${CALLER_ID}" \
     --assignee-principal-type User \
     --role "Key Vault Secrets Officer" \

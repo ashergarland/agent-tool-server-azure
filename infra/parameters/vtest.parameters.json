@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": { "value": "vtest" },
+
+    "allowedResourceGroups": { "value": [] },
+    "allowedManagementGroupIds": { "value": [] },
+    "tenantDeploymentsEnabled": { "value": false },
+    "verifyRbac": { "value": true },
+
+    "enableMutations": { "value": false },
+    "mutationConfirmationRequired": { "value": true },
+
+    "enableDeployments": { "value": false },
+    "bicepCliPath": { "value": "/usr/local/bin/bicep" },
+    "bicepCliSha256": { "value": "" },
+    "bicepRemoteModulesEnabled": { "value": false },
+    "bicepAllowedRegistries": { "value": "" },
+    "bicepCompileTimeoutMs": { "value": 60000 },
+    "bicepMaxConcurrency": { "value": 1 },
+    "bicepMaxFiles": { "value": 64 },
+    "bicepMaxFileBytes": { "value": 262144 },
+    "bicepMaxTotalBytes": { "value": 1048576 },
+
+    "deploymentPreviewTtlMs": { "value": 900000 },
+    "deploymentMaxPreviewChanges": { "value": 200 },
+    "deploymentMaxConcurrent": { "value": 1 },
+
+    "maxBodyBytes": { "value": 4194304 },
+    "requestTimeoutMs": { "value": 30000 },
+    "shutdownGraceMs": { "value": 5000 },
+
+    "cpu": { "value": "0.25" },
+    "memory": { "value": "0.5Gi" },
+    "minReplicas": { "value": 0 },
+
+    "enableHealthAlerts": { "value": false },
+    "tags": { "value": { "purpose": "pr-verification" } },
+
+    "enableMcpHttp": { "value": false },
+    "maxReplicas": { "value": 2 },
+    "httpConcurrentRequests": { "value": 7 },
+    "rateLimitMax": { "value": 42 },
+    "rateLimitWindowMs": { "value": 60000 },
+    "logLevel": { "value": "debug" }
+  }
+}
