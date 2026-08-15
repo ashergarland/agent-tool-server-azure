@@ -45,14 +45,26 @@ TAG="sha-${SHORT_SHA}"
 REPOSITORY='agent-tool-server-azure'
 
 log "Building ${REGISTRY_SERVER}/${REPOSITORY}:${TAG} in ACR"
-az acr build \
+# Logs are deliberately not streamed. The CLI pipes them through colorama, which crashes on any
+# console whose code page cannot encode the build output — aborting a release whose cloud build is
+# perfectly fine. They are fetched explicitly below if the build actually fails.
+if ! az acr build \
   --registry "${REGISTRY_NAME}" \
   --image "${REPOSITORY}:${TAG}" \
   --build-arg "GIT_SHA=${GIT_SHA}" \
   --build-arg "SERVICE_VERSION=${VERSION}" \
   --file "${REPO_ROOT}/Dockerfile" \
   "${REPO_ROOT}" \
-  --output none
+  --no-logs \
+  --output none; then
+  FAILED_RUN="$(az acr task list-runs --registry "${REGISTRY_NAME}" --top 1 \
+    --query '[0].runId' --output tsv 2>/dev/null || true)"
+  if [[ -n "${FAILED_RUN}" ]]; then
+    warn "The ACR build failed. Logs for run ${FAILED_RUN}:"
+    az acr task logs --registry "${REGISTRY_NAME}" --run-id "${FAILED_RUN}" || true
+  fi
+  die "Image build failed."
+fi
 
 DIGEST="$(az acr repository show \
   --name "${REGISTRY_NAME}" \
