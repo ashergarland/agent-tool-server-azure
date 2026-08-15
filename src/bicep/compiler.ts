@@ -5,7 +5,7 @@ import { relative, sep } from 'node:path';
 import { AppError, internalError } from '../errors.js';
 import { Semaphore } from '../util/semaphore.js';
 import { withMaterializedBundle, type MaterializedBundle } from './materialize.js';
-import { assertModuleReferencesAllowed, type ModulePolicy } from './modules.js';
+import { assertBundleSourceAllowed, type ModulePolicy } from './modules.js';
 import { NodeProcessRunner, type ProcessRunner } from './process.js';
 import type {
   BicepCompiler,
@@ -67,6 +67,22 @@ const toBundlePath = (root: string, candidate: string): string | undefined => {
   return rel.split(sep).join('/');
 };
 
+/**
+ * Diagnostic *messages* also embed absolute paths — a failed file load reports the path it tried to
+ * open — so the compile root is stripped from the text as well as from the file field. Without
+ * this, a message doubles as a disclosure of the materialisation directory and as a file-existence
+ * oracle for the host.
+ */
+const scrubRoot = (message: string, root: string): string => {
+  const variants = [root, root.split(sep).join('/'), root.split('/').join(sep)];
+  let scrubbed = message;
+  for (const variant of new Set(variants)) {
+    if (variant.length === 0) continue;
+    scrubbed = scrubbed.split(variant).join('<bundle>');
+  }
+  return scrubbed;
+};
+
 export const parseDiagnostics = (stderr: string, root: string): readonly BicepDiagnostic[] => {
   const diagnostics: BicepDiagnostic[] = [];
   for (const rawLine of stderr.split(/\r?\n/)) {
@@ -79,7 +95,7 @@ export const parseDiagnostics = (stderr: string, root: string): readonly BicepDi
       diagnostics.push({
         level: levelOf(groups['level'] ?? 'Error'),
         code: groups['code'],
-        message: (groups['message'] ?? '').trim(),
+        message: scrubRoot((groups['message'] ?? '').trim(), root),
         file: toBundlePath(root, groups['file'] ?? ''),
         line: Number(groups['line']),
         column: Number(groups['column']),
@@ -92,7 +108,7 @@ export const parseDiagnostics = (stderr: string, root: string): readonly BicepDi
       diagnostics.push({
         level: levelOf(bare.groups['level'] ?? 'Error'),
         code: bare.groups['code'],
-        message: (bare.groups['message'] ?? '').trim(),
+        message: scrubRoot((bare.groups['message'] ?? '').trim(), root),
         file: undefined,
         line: undefined,
         column: undefined,
@@ -214,7 +230,7 @@ export class CliBicepCompiler implements BicepCompiler {
   }
 
   public async compile(request: BicepCompileRequest): Promise<BicepCompileResult> {
-    assertModuleReferencesAllowed(request.bundle, this.config.modulePolicy);
+    assertBundleSourceAllowed(request.bundle, this.config.modulePolicy);
 
     const info = await this.describe();
     if (!info.available) {

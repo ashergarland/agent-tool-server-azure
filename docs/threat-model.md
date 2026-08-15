@@ -77,12 +77,19 @@ similar is a validation error, not an ignored field.
 - The bundle is materialised into a fresh directory whose name carries 128 bits of randomness on top
   of `mkdtemp`, with files created exclusively (`wx`) so an existing entry — including a symlink —
   is an error rather than a target. The directory is always removed.
+- Bicep's compile-time file functions (`loadTextContent`, `loadFileAsBase64`, `loadJsonContent`,
+  `loadYamlContent`) are evaluated by the compiler against the real filesystem and inline the result
+  into the template, so their argument must be a literal, non-interpolated relative path that
+  resolves to a file supplied in the same bundle. Without this,
+  `loadTextContent('../../../../proc/self/environ')` would turn a template into an arbitrary file
+  read whose output is returned to the caller.
 - The compiler is a pinned, checksum-verified official Bicep CLI installed at image build time and
   invoked directly: argv array, no shell, an environment constructed from nothing rather than
   inherited, non-root, wall-clock timeout, output cap, bounded concurrency, isolated working
   directory. The server never downloads a compiler at runtime.
-- Compiler diagnostics are rewritten to bundle-relative paths, so a caller never learns where their
-  source was materialised.
+- Compiler diagnostics are rewritten to bundle-relative paths, and the compile root is stripped from
+  message text as well, so a caller never learns where their source was materialised and cannot use
+  a failed read as a file-existence oracle.
 
 ### Compiled template inspection
 

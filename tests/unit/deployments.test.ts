@@ -750,6 +750,68 @@ describe('DeploymentService.rollback', () => {
     ).rejects.toThrowError(/does not match a recent rollback preview/);
   });
 
+  it('refuses a confirmation hash that came from an ordinary what-if preview', async () => {
+    const harness = setup();
+    const recordId = await succeed(harness);
+
+    // An ordinary preview at the same scope also records the same previous successful deployment.
+    // Approving *its* plan must not authorise redeploying the older template.
+    const unrelated = await harness.service.whatIf(
+      { bundle, parameters: { name: 'something-else' }, scope: rgScope },
+      PRINCIPAL,
+      'r',
+    );
+
+    const started = harness.provider.calls.filter((call) => call.name === 'beginDeployment').length;
+    await expect(
+      harness.service.rollback(
+        {
+          recordId,
+          confirm: true,
+          confirmationHash: unrelated.confirmationHash,
+          reason: 'revert',
+        },
+        PRINCIPAL,
+        'r',
+      ),
+    ).rejects.toThrowError(/does not match a recent rollback preview/);
+    expect(harness.provider.calls.filter((call) => call.name === 'beginDeployment')).toHaveLength(
+      started,
+    );
+  });
+
+  it('refuses to apply a rollback with secure values that differ from the previewed ones', async () => {
+    const harness = setup();
+    const { result } = await previewAndDeploy(harness, { name: 'sa', adminPassword: 'hunter2' });
+    await harness.store.patch(result.recordId, PRINCIPAL, { status: 'succeeded' });
+
+    const preview = await harness.service.rollback(
+      {
+        recordId: result.recordId,
+        confirm: false,
+        reason: 'revert',
+        secureParameters: { adminPassword: 'previewed-value' },
+      },
+      PRINCIPAL,
+      'r',
+    );
+    if (preview.phase !== 'preview') throw new Error('expected a preview');
+
+    await expect(
+      harness.service.rollback(
+        {
+          recordId: result.recordId,
+          confirm: true,
+          confirmationHash: preview.preview.confirmationHash,
+          reason: 'revert',
+          secureParameters: { adminPassword: 'a-different-value' },
+        },
+        PRINCIPAL,
+        'r',
+      ),
+    ).rejects.toThrowError(expect.objectContaining({ code: 'conflict' }) as unknown);
+  });
+
   it('refuses to redeploy a record that never succeeded', async () => {
     const harness = setup();
     const { result } = await previewAndDeploy(harness);

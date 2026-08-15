@@ -303,7 +303,8 @@ hash, and refuses anything that differs. Previews expire.
 
 **What is rejected.** Absolute paths, `..` traversal, duplicate normalised paths, reserved device
 names, invalid encoding, disallowed file types, a caller-supplied `bicepconfig.json`, and bundles
-that exceed the configured file count or size. In the compiled template:
+that exceed the configured file count or size. Compile-time file loads (`loadTextContent` and
+friends) must resolve to a file in the same bundle. In the compiled template:
 `Microsoft.Resources/deploymentScripts`, linked or external templates and parameter files, external
 script and content URLs, Complete mode, unsupported or non-allow-listed scopes, and any structure
 that cannot be bounded or inspected.

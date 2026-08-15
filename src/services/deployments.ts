@@ -3,7 +3,7 @@ import type { Logger } from 'pino';
 import type { AppConfig } from '../config/index.js';
 import { badRequest, conflict, notFound } from '../errors.js';
 import {
-  assertModuleReferencesAllowed,
+  assertBundleSourceAllowed,
   computeConfirmationHash,
   hashJson,
   inspectTemplate,
@@ -193,7 +193,7 @@ export class DeploymentService {
     const bundle = normalizeBundle(bundleInput, this.deps.config.bicep.bundleLimits);
     // Module policy is enforced here, in the policy layer, rather than only inside the CLI adapter.
     // A different compiler adapter must not be able to widen what a caller may reference.
-    assertModuleReferencesAllowed(bundle, this.deps.config.bicep.modulePolicy);
+    assertBundleSourceAllowed(bundle, this.deps.config.bicep.modulePolicy);
 
     const compiled = await this.deps.metrics.time('bicep_compile_ms', {}, () =>
       this.deps.compiler.compile({ bundle }),
@@ -363,6 +363,7 @@ export class DeploymentService {
       correlationId: undefined,
       outputsMetadata: undefined,
       previousSuccessfulRecordId: await this.findPreviousSuccessful(scopeKey, principal),
+      rollbackOfRecordId: undefined,
       reason: undefined,
       requestId,
       error: undefined,
@@ -717,7 +718,7 @@ export class DeploymentService {
     }
 
     const record = await this.deps.store.findByConfirmationHash(input.confirmationHash, principal);
-    if (!record || record.previousSuccessfulRecordId !== target.id) {
+    if (!record || record.rollbackOfRecordId !== target.id) {
       throw badRequest(
         'confirmationHash does not match a recent rollback preview for this record. Re-run ' +
           'azure_rollback_deployment without confirm to produce a fresh preview.',
@@ -726,6 +727,26 @@ export class DeploymentService {
     if (Date.parse(record.expiresAt) <= this.now().getTime()) {
       throw badRequest(`The rollback preview expired at ${record.expiresAt}. Produce a new one.`);
     }
+
+    // The same binding deploy() enforces: the template, the parameters (including the secure values
+    // supplied on *this* call), the scope and the mode must be exactly what the preview covered.
+    // Without this, a caller could preview a rollback with one set of secure values and apply it
+    // with another.
+    const recomputed = computeConfirmationHash({
+      sourceHash: target.sourceHash,
+      templateHash: target.templateHash,
+      parametersHash: hashJson(parameters),
+      scopeKey: target.scopeKey,
+      mode: 'Incremental',
+      previewHash: record.previewHash,
+    });
+    if (recomputed !== input.confirmationHash || recomputed !== record.confirmationHash) {
+      throw conflict(
+        'The parameters differ from the previewed rollback. Re-run azure_rollback_deployment ' +
+          'without confirm and obtain approval for the new plan.',
+      );
+    }
+
     if (record.status === 'running' || record.status === 'succeeded') {
       return {
         phase: 'deployed',
@@ -817,6 +838,7 @@ export class DeploymentService {
       correlationId: undefined,
       outputsMetadata: undefined,
       previousSuccessfulRecordId: target.id,
+      rollbackOfRecordId: target.id,
       reason: undefined,
       requestId,
       error: undefined,

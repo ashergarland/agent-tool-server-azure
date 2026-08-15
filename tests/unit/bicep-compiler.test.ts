@@ -3,7 +3,11 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CliBicepCompiler, parseDiagnostics } from '../../src/bicep/compiler.js';
 import { normalizeBundle } from '../../src/bicep/bundle.js';
-import { DEFAULT_MODULE_POLICY, assertModuleReferencesAllowed } from '../../src/bicep/modules.js';
+import {
+  DEFAULT_MODULE_POLICY,
+  assertFileLoadsAllowed,
+  assertModuleReferencesAllowed,
+} from '../../src/bicep/modules.js';
 import { createProcessRunner, processResult, RG_TEMPLATE } from '../helpers/bicep.js';
 import type { ProcessRunRequest } from '../../src/bicep/process.js';
 
@@ -70,6 +74,20 @@ describe('parseDiagnostics', () => {
     expect(
       parseDiagnostics(`${outside}(1,1) : Warning BCP081: hmm`, root)[0]?.file,
     ).toBeUndefined();
+  });
+
+  it('scrubs the compile directory out of diagnostic message text', () => {
+    const diagnostics = parseDiagnostics(
+      `${path}(1,9) : Error BCP302: Unable to open file at path "${path}.json".`,
+      root,
+    );
+    expect(diagnostics[0]?.message).not.toContain(root);
+    expect(diagnostics[0]?.message).toContain('<bundle>');
+  });
+
+  it('scrubs the compile directory out of unpositioned diagnostics too', () => {
+    const diagnostics = parseDiagnostics(`Error BCP091: could not read ${root}/secret`, root);
+    expect(diagnostics[0]?.message).not.toContain(root);
   });
 
   it('parses diagnostics that carry no position', () => {
@@ -199,6 +217,83 @@ describe('CliBicepCompiler', () => {
         bundle: bundle("module x 'br:contoso.azurecr.io/bicep/storage:v1' = {}\n"),
       }),
     ).rejects.toThrowError(/Remote Bicep modules are disabled/);
+    expect(buildRequests(runner)).toHaveLength(0);
+  });
+});
+
+describe('compile-time file loads', () => {
+  const withFiles = (files: { path: string; content: string }[]) =>
+    normalizeBundle({ mainFile: 'main.bicep', files });
+
+  it('allows a load that resolves to a file in the same bundle', () => {
+    expect(() =>
+      assertFileLoadsAllowed(
+        withFiles([
+          { path: 'main.bicep', content: "var x = loadTextContent('data/settings.json')\n" },
+          { path: 'data/settings.json', content: '{}' },
+        ]),
+      ),
+    ).not.toThrow();
+  });
+
+  it('allows a relative load from a nested module', () => {
+    expect(() =>
+      assertFileLoadsAllowed(
+        withFiles([
+          { path: 'main.bicep', content: 'param a string\n' },
+          {
+            path: 'modules/storage.bicep',
+            content: "var x = loadJsonContent('../data/settings.json')\n",
+          },
+          { path: 'data/settings.json', content: '{}' },
+        ]),
+      ),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ['loadTextContent', "loadTextContent('../../../../etc/passwd')"],
+    ['loadFileAsBase64', "loadFileAsBase64('../../../../proc/self/environ')"],
+    ['loadJsonContent', "loadJsonContent('../../secrets.json')"],
+    ['loadYamlContent', "loadYamlContent('../../../config.yaml')"],
+  ])('rejects %s reaching outside the bundle', (_name, expression) => {
+    expect(() =>
+      assertFileLoadsAllowed(
+        withFiles([{ path: 'main.bicep', content: `var x = ${expression}\n` }]),
+      ),
+    ).toThrowError(/not a file in this bundle/);
+  });
+
+  it('rejects a load of a path that is inside the bundle root but was never supplied', () => {
+    expect(() =>
+      assertFileLoadsAllowed(
+        withFiles([
+          { path: 'main.bicep', content: "var x = loadTextContent('bicepconfig.json')\n" },
+        ]),
+      ),
+    ).toThrowError(/not a file in this bundle/);
+  });
+
+  it('rejects a computed path, which cannot be checked before the compiler resolves it', () => {
+    expect(() =>
+      assertFileLoadsAllowed(
+        withFiles([
+          {
+            path: 'main.bicep',
+            content: "param p string\nvar x = loadTextContent('${p}/secret.txt')\n",
+          },
+        ]),
+      ),
+    ).toThrowError(/computed path/);
+  });
+
+  it('is enforced by the compiler before any process is started', async () => {
+    const runner = runnerFor(() => processResult());
+    await expect(
+      compilerFor(runner).compile({
+        bundle: bundle("var x = loadTextContent('../../../../etc/passwd')\n"),
+      }),
+    ).rejects.toThrowError(/not a file in this bundle/);
     expect(buildRequests(runner)).toHaveLength(0);
   });
 });

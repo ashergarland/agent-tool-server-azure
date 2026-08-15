@@ -42,7 +42,16 @@ export interface DeploymentRecord {
   readonly armDeploymentName: string | undefined;
   readonly correlationId: string | undefined;
   readonly outputsMetadata: readonly { readonly name: string; readonly type: string }[] | undefined;
+  /** The most recent successful deployment at this scope when the preview was taken. */
   readonly previousSuccessfulRecordId: string | undefined;
+  /**
+   * Set only on a rollback preview, naming the record being redeployed.
+   *
+   * This is deliberately distinct from {@link previousSuccessfulRecordId}, which every preview
+   * carries: a rollback confirmation must not be satisfiable by an ordinary preview that happens to
+   * follow the same successful deployment.
+   */
+  readonly rollbackOfRecordId: string | undefined;
   readonly reason: string | undefined;
   readonly requestId: string | undefined;
   readonly error: { readonly code: string; readonly message: string } | undefined;
