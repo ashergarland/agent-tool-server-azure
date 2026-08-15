@@ -1,7 +1,7 @@
 {
   "name": "agent-tool-server-azure",
-  "version": "0.1.0",
-  "description": "Backend connector that lets ChatGPT safely inspect, diagnose and operate an Azure environment.",
+  "version": "0.2.0",
+  "description": "Guard-railed Azure control plane for agents over HTTP/OpenAPI, stdio MCP and remote MCP.",
   "license": "MIT",
   "type": "module",
   "private": true,

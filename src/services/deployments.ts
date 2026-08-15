@@ -894,7 +894,7 @@ const outputsMetadata = (
         name,
         type:
           typeof value === 'object' && value !== null && 'type' in value
-            ? String((value).type)
+            ? String(value.type)
             : 'unknown',
       }));
 
@@ -915,12 +915,10 @@ const summarizeOutputs = (
   for (const [name, entry] of Object.entries(outputs)) {
     const type =
       typeof entry === 'object' && entry !== null && 'type' in entry
-        ? String((entry).type).toLowerCase()
+        ? String(entry.type).toLowerCase()
         : 'unknown';
     const value =
-      typeof entry === 'object' && entry !== null && 'value' in entry
-        ? (entry).value
-        : entry;
+      typeof entry === 'object' && entry !== null && 'value' in entry ? entry.value : entry;
 
     if (type.startsWith('secure') || SENSITIVE_NAME.test(name)) {
       redacted.push(name);

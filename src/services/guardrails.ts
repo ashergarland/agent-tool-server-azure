@@ -70,7 +70,7 @@ export class Guardrails {
   public assertSubscriptionAllowed(subscriptionId: string): string {
     const allowed = this.config.azure.allowedSubscriptionIds;
     if (allowed.length > 0 && !allowed.includes(subscriptionId.toLowerCase())) {
-      throw forbidden(`Subscription ${subscriptionId} is outside the connector's allow-list`, {
+      throw forbidden(`Subscription ${subscriptionId} is outside the server's allow-list`, {
         allowedSubscriptionIds: allowed,
       });
     }
@@ -87,7 +87,7 @@ export class Guardrails {
   public assertResourceGroupAllowed(resourceGroup: string): string {
     const allowed = this.config.azure.allowedResourceGroups;
     if (allowed.length > 0 && !allowed.includes(resourceGroup.toLowerCase())) {
-      throw forbidden(`Resource group ${resourceGroup} is outside the connector's allow-list`, {
+      throw forbidden(`Resource group ${resourceGroup} is outside the server's allow-list`, {
         allowedResourceGroups: allowed,
       });
     }

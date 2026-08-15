@@ -42,6 +42,10 @@ const ok = (detail?: string): ComponentReport => ({ state: 'ok', detail });
  * the registry built, the record store answers, the pinned compiler is present and verified, and
  * the identity configuration is coherent. It performs no mutation and contacts no Azure control
  * plane, so a probe can run as often as the platform likes.
+ *
+ * A component reports `degraded` when the server can still serve traffic but an operator should
+ * look at it — an unpinned compiler digest, for example. Only `unavailable` makes the server not
+ * ready, because taking a working replica out of rotation over a warning is its own outage.
  */
 export const buildReadinessReport = async (
   config: AppConfig,
@@ -85,9 +89,7 @@ export const buildReadinessReport = async (
   components['identity'] = describeIdentity(config);
   components['scopes'] = describeScopes(config);
 
-  const ready = Object.values(components).every(
-    (component) => component.state === 'ok' || component.state === 'disabled',
-  );
+  const ready = Object.values(components).every((component) => component.state !== 'unavailable');
 
   return {
     ready,

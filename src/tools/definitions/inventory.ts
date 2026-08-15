@@ -26,11 +26,12 @@ export const listSubscriptionsTool = defineTool({
     useWhen: [
       'You do not yet know which subscription a resource lives in.',
       'You are about to plan a deployment and need to know which subscriptions are deployable.',
-      'The user names an environment ("prod", "sandbox") rather than a subscription id.',
+      'Someone names an environment ("prod", "sandbox") rather than a subscription id.',
     ],
     doNotUseWhen: [
       'You already have a fully qualified ARM resource id — use azure_get_resource instead.',
       'You need resource groups rather than subscriptions — use azure_list_resource_groups.',
+      'You already hold an approved plan and a confirmationHash — apply it with azure_deploy_bicep.',
     ],
     requiredScope: 'None beyond the configured allow-list; this is the entry point.',
     changesState: false,
@@ -88,8 +89,8 @@ export const searchResourcesTool = defineTool({
       'You want an inventory of a resource group or subscription.',
     ],
     doNotUseWhen: [
-      'The question needs aggregation, joins or projections that filters cannot express — only ' +
-        'then fall back to azure_run_graph_query.',
+      'The question needs an aggregation — summarize, count or grouped totals across resource ' +
+        'types — which filters cannot express; use azure_run_graph_query instead.',
       'You already have the exact ARM resource id — use azure_get_resource.',
     ],
     requiredScope: 'Read access to the searched subscriptions.',
@@ -170,21 +171,23 @@ export const getResourceTool = defineTool({
 
 export const runGraphQueryTool = defineTool({
   name: 'azure_run_graph_query',
-  title: 'Run a Resource Graph query',
-  summary: 'Execute a read-only Azure Resource Graph (KQL) query.',
+  title: 'Run a Resource Graph aggregation query',
+  summary: 'Execute a read-only Resource Graph (KQL) query to summarize or count resources.',
   description:
-    'Escape hatch for questions that structured search cannot express, such as aggregations ' +
-    'across resource types. The query runs read-only against the allow-listed subscriptions and ' +
-    'mutating or external-data KQL operators are rejected before the call is made.',
+    'Escape hatch for questions structured search cannot express: summarize, count, group by, ' +
+    'join or project across many resource types and subscriptions at once. The query runs ' +
+    'read-only against the allow-listed subscriptions, and mutating or external-data KQL ' +
+    'operators are rejected before the call is made.',
   kind: 'read',
   routing: {
     useWhen: [
-      'You need an aggregation, join, projection or summarize that filters cannot express.',
+      'You need an aggregation: summarize, count, grouped totals or a projection across types.',
+      'The question spans many resource types or the whole tenant at once.',
       'azure_search_resources has already proven insufficient for this question.',
     ],
     doNotUseWhen: [
-      'A type, name, location or tag filter would answer the question — use ' +
-        'azure_search_resources, which is safer and cheaper.',
+      'A type, name, location or tag filter would answer it — use azure_search_resources, which ' +
+        'is safer and cheaper.',
       'You are tempted to write a query that changes data; Resource Graph is read-only and such ' +
         'queries are rejected.',
     ],

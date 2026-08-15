@@ -25,8 +25,12 @@ export const toErrorBody = (error: AppError, requestId: string): ErrorBody => ({
 /**
  * Single place where any thrown value becomes an HTTP response. Internal errors never leak their
  * message to the caller in production, but are always logged with the request id.
+ *
+ * Whether this is production is taken from the validated configuration rather than from
+ * `process.env` at throw time: the process environment can be mutated after startup, and the
+ * decision to withhold an error message is not one that should depend on a mutable global.
  */
-export const registerErrorHandler = (app: HttpServer): void => {
+export const registerErrorHandler = (app: HttpServer, isProduction: boolean): void => {
   app.setNotFoundHandler((request: FastifyRequest, reply: FastifyReply) => {
     const error = new AppError('not_found', `No route for ${request.method} ${request.url}`);
     void reply.status(error.status).send(toErrorBody(error, request.id));
@@ -57,8 +61,8 @@ export const registerErrorHandler = (app: HttpServer): void => {
     else request.log.warn(logPayload, error.message);
 
     const exposed =
-      error.status >= 500 && process.env['NODE_ENV'] === 'production'
-        ? new AppError(error.code, 'The connector failed to complete the request')
+      error.status >= 500 && isProduction
+        ? new AppError(error.code, 'The server failed to complete the request')
         : error;
 
     void reply.status(error.status).send(toErrorBody(exposed, request.id));

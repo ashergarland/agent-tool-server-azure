@@ -93,7 +93,7 @@ export const createHttpServer = (deps: HttpServerDeps): HttpServer => {
     if (!decision.allowed) throw rateLimitExceeded(reply, decision);
   });
 
-  registerErrorHandler(app);
+  registerErrorHandler(app, config.isProduction);
 
   app.get('/health', () => ({
     status: 'ok' as const,
