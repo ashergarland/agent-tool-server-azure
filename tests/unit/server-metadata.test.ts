@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { envSchema } from '../../src/config/index.js';
+import { GUID, findDeploymentSpecificHosts } from '../../scripts/lib/hygiene.js';
 
 const read = (relative: string): Record<string, unknown> =>
   JSON.parse(
@@ -89,9 +90,8 @@ describe('server.json registry metadata', () => {
 
   it('never embeds a value, secret or account-specific identifier', () => {
     const serialized = JSON.stringify(serverJson);
-    // Any GUID here would be somebody's tenant, subscription or client id.
-    expect(serialized).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
-    expect(serialized).not.toMatch(/\.azurecr\.io|\.azurewebsites\.net|\.azurecontainerapps\.io/);
+    expect(serialized).not.toMatch(GUID);
+    expect(findDeploymentSpecificHosts(serialized)).toEqual([]);
     for (const entry of packages) {
       for (const variable of entry.environmentVariables ?? []) {
         expect(variable).not.toHaveProperty('value');

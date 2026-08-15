@@ -39,6 +39,12 @@ RUN apk add --no-cache wget ca-certificates \
 FROM node:22-alpine AS runtime
 WORKDIR /app
 
+# The Bicep CLI is a self-contained .NET binary. On musl it needs ICU and the C++ runtime, and
+# without them it does not fail gracefully — it aborts on startup with "Couldn't find a valid ICU
+# package". Invariant globalization would also silence that, but it changes string comparison and
+# casing semantics inside a template compiler, so the real libraries are installed instead.
+RUN apk add --no-cache icu-libs icu-data-full libstdc++ libgcc
+
 ENV NODE_ENV=production \
     PORT=8080 \
     HOST=0.0.0.0

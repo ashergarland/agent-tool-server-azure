@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { envSchema } from '../../src/config/index.js';
+import { GUID, findDeploymentSpecificHosts } from '../../scripts/lib/hygiene.js';
 
 const root = new URL('../../', import.meta.url);
 const read = (relative: string): string =>
@@ -68,8 +69,8 @@ describe('per-environment parameter files', () => {
 
   it.each(parameterFiles)('%s contains no account-specific identifier', (file) => {
     const contents = read(`infra/parameters/${file}`);
-    expect(contents).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
-    expect(contents).not.toMatch(/\.azurecr\.io|\.azurewebsites\.net|\.azurecontainerapps\.io/);
+    expect(contents).not.toMatch(GUID);
+    expect(findDeploymentSpecificHosts(contents)).toEqual([]);
     expect(contents).not.toMatch(/@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
   });
 

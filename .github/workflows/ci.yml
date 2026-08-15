@@ -103,11 +103,46 @@ jobs:
 
       - name: Verify the pinned Bicep CLI is present, executable and read-only
         run: |
-          docker run --rm --entrypoint /usr/local/bin/bicep agent-tool-server-azure:ci --version
           perms="$(docker run --rm --entrypoint stat agent-tool-server-azure:ci -c '%a %U' /usr/local/bin/bicep)"
           echo "bicep: $perms"
           test "$perms" = "555 root"
           echo "recorded digest: $(docker run --rm --entrypoint cat agent-tool-server-azure:ci /usr/local/share/bicep.sha256)"
+
+      - name: Verify the Bicep CLI actually compiles as the runtime user
+        run: |
+          # --version alone would miss a compiler that starts but cannot do real work, and
+          # compiling exercises the globalization stack a self-contained .NET binary depends on.
+          docker run --rm --entrypoint /usr/local/bin/bicep agent-tool-server-azure:ci --version
+          docker run --rm --entrypoint sh agent-tool-server-azure:ci -c '
+            printf "param name string = \"example\"\noutput greeting string = \"hello \${name}\"\n" > /tmp/main.bicep
+            /usr/local/bin/bicep build /tmp/main.bicep --stdout
+          ' | tee /tmp/compiled.json
+          grep -q 'deploymentTemplate.json' /tmp/compiled.json
+
+      - name: Verify the server reports the compiler as ready when deployments are enabled
+        env:
+          API_KEY: ci-readiness-key-that-is-long-enough-000
+        run: |
+          docker run -d --name deployable -p 8081:8080 \
+            -e NODE_ENV=development \
+            -e API_KEYS="$API_KEY" \
+            -e DEPLOYMENTS_ENABLED=true \
+            agent-tool-server-azure:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://localhost:8081/health > /dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8081/ready | tee /tmp/ready-deployable.json
+          docker rm -f deployable
+          # Assert through the readiness report an operator actually relies on, not just against the
+          # binary: a compiler that cannot start must never read as ready.
+          state="$(jq -r '.components.bicepCompiler.state' /tmp/ready-deployable.json)"
+          echo "bicepCompiler: $state ($(jq -r '.components.bicepCompiler.detail' /tmp/ready-deployable.json))"
+          case "$state" in
+            ok|degraded) ;;
+            *) echo "the Bicep compiler is not usable in this image"; exit 1 ;;
+          esac
+          test "$(jq -r '.ready' /tmp/ready-deployable.json)" = "true"
 
       - name: Verify the stdio MCP entry point starts and lists tools
         run: |

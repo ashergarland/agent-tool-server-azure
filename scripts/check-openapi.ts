@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { createToolRegistry } from '../src/tools/registry.js';
+import { GUID, isDeploymentSpecificUrl } from './lib/hygiene.js';
 
 /**
  * Checks an emitted OpenAPI document against the live tool registry.
@@ -73,14 +74,12 @@ const main = async (): Promise<void> => {
 
   // A published artefact must not carry the hostname, tenant or subscription of whoever emitted it.
   const serialized = JSON.stringify(document);
-  check(
-    !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(serialized),
-    'the document contains something shaped like a GUID',
-  );
+  check(!GUID.test(serialized), 'the document contains something shaped like a GUID');
   for (const server of document.servers ?? []) {
+    const url = server.url ?? '';
     check(
-      !/azurecontainerapps\.io|azurewebsites\.net/.test(server.url ?? ''),
-      `the document advertises a deployment-specific server URL: ${server.url ?? ''}`,
+      !isDeploymentSpecificUrl(url),
+      `the document advertises a deployment-specific server URL: ${url}`,
     );
   }
 
