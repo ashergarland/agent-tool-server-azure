@@ -123,14 +123,18 @@ const errorResponses: JsonObject = {
   },
 };
 
+const actionDescription = (tool: RegisteredTool): string =>
+  tool.kind === 'write'
+    ? `${tool.summary} This changes Azure state and requires a preview plus explicit user confirmation.`
+    : tool.summary;
+
 const toolPath = (tool: RegisteredTool): JsonObject => ({
   post: {
     operationId: tool.name,
     summary: tool.summary,
-    description:
-      tool.kind === 'write'
-        ? `${tool.description}\n\nThis operation changes Azure state. Always preview first (dryRun=true, or azure_what_if_bicep for deployments) and obtain explicit user confirmation before setting confirm=true.`
-        : tool.description,
+    // ChatGPT Actions rejects operation descriptions longer than 300 characters. Full routing
+    // guidance remains available from the authenticated /tools catalogue and MCP metadata.
+    description: actionDescription(tool),
     tags: [tool.kind === 'write' ? 'operations' : 'read'],
     'x-openai-isConsequential': tool.kind === 'write',
     'x-tool-annotations': {

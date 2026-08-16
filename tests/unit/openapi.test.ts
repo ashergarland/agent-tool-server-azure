@@ -38,6 +38,22 @@ const bareObjectSchemas = (node: unknown, path: string[] = []): string[] => {
   return offenders;
 };
 
+const operationDescriptions = (node: unknown): string[] => {
+  if (node === null || typeof node !== 'object') return [];
+
+  const paths = (node as Record<string, unknown>)['paths'];
+  if (paths === null || typeof paths !== 'object') return [];
+
+  return Object.values(paths as Record<string, unknown>).flatMap((path) => {
+    if (path === null || typeof path !== 'object') return [];
+    return Object.values(path as Record<string, unknown>).flatMap((operation) => {
+      if (operation === null || typeof operation !== 'object') return [];
+      const description = (operation as Record<string, unknown>)['description'];
+      return typeof description === 'string' ? [description] : [];
+    });
+  });
+};
+
 describe('OpenAPI document', () => {
   const at = (node: unknown, ...path: string[]): unknown =>
     path.reduce<unknown>(
@@ -53,6 +69,12 @@ describe('OpenAPI document', () => {
 
   it('never emits an object schema without a declared shape', () => {
     expect(bareObjectSchemas(document)).toEqual([]);
+  });
+
+  it('keeps operation descriptions within the ChatGPT Actions limit', () => {
+    expect(operationDescriptions(document).every((description) => description.length <= 300)).toBe(
+      true,
+    );
   });
 
   it('describes the /version payload so the importer can validate it', () => {
