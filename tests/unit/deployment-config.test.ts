@@ -1,4 +1,6 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { envSchema } from '../../src/config/index.js';
@@ -13,10 +15,24 @@ const containerAppBicep = read('infra/modules/container-app.bicep');
 const provisionSh = read('scripts/bootstrap/provision.sh');
 const deploySh = read('scripts/bootstrap/deploy.sh');
 const commonSh = read('scripts/lib/common.sh');
+const deploymentGuide = read('docs/deployment.md');
+const readme = read('README.md');
 
 const parameterFiles = readdirSync(fileURLToPath(new URL('infra/parameters', root))).filter(
   (name) => name.endsWith('.parameters.json'),
 );
+const canonicalOperatorEnvironments = ['dev', 'prod', 'vtest'];
+const nonLiveExample = 'nonlive.example.parameters.json';
+const bashExecutable = (() => {
+  if (process.platform !== 'win32') return 'bash';
+
+  const gitExecPath = spawnSync('git', ['--exec-path'], { encoding: 'utf8' });
+  if (gitExecPath.status === 0) {
+    const candidate = resolve(gitExecPath.stdout.trim(), '..', '..', '..', 'bin', 'bash.exe');
+    if (existsSync(candidate)) return candidate;
+  }
+  return 'bash';
+})();
 
 const declaredParameters = new Set(
   [...mainBicep.matchAll(/^param\s+([A-Za-z0-9_]+)\s/gm)].map((match) => match[1] as string),
@@ -28,10 +44,12 @@ const containerAppEnvNames = [
   ...containerAppBicep.matchAll(/name:\s*'([A-Z0-9_]+)'\s*$/gm),
 ].map((match) => match[1] as string);
 
-describe('per-environment parameter files', () => {
-  it('exist for every environment the scripts reference', () => {
-    expect(parameterFiles).toContain('prod.parameters.json');
-    expect(parameterFiles).toContain('dev.parameters.json');
+describe('public parameter examples', () => {
+  it('contains only explicitly named non-live examples', () => {
+    expect(parameterFiles).toEqual([nonLiveExample]);
+    for (const environment of canonicalOperatorEnvironments) {
+      expect(parameterFiles).not.toContain(`${environment}.parameters.json`);
+    }
   });
 
   it.each(parameterFiles)('%s only sets parameters main.bicep declares', (file) => {
@@ -43,7 +61,7 @@ describe('per-environment parameter files', () => {
     }
   });
 
-  it.each(parameterFiles)('%s pins every setting a release could otherwise reset', (file) => {
+  it.each(parameterFiles)('%s demonstrates settings a release could otherwise reset', (file) => {
     const parsed = JSON.parse(read(`infra/parameters/${file}`)) as {
       parameters: Record<string, { value: unknown }>;
     };
@@ -74,13 +92,28 @@ describe('per-environment parameter files', () => {
     expect(contents).not.toMatch(/@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
   });
 
-  it('keeps deployments and mutations disabled by default in every environment', () => {
+  it('is visibly non-live and selects no canonical operator environment', () => {
+    const parsed = JSON.parse(read(`infra/parameters/${nonLiveExample}`)) as {
+      parameters: Record<string, { value: unknown }>;
+    };
+    const environmentName = parsed.parameters['environmentName']?.value;
+    const tags = parsed.parameters['tags']?.value as Record<string, unknown>;
+
+    expect(nonLiveExample).toMatch(/\.example\.parameters\.json$/);
+    expect(environmentName).toBe('example');
+    expect(canonicalOperatorEnvironments).not.toContain(environmentName);
+    expect(tags['purpose']).toBe('non-live-example');
+    expect(parsed.parameters['allowedSubscriptionIds']?.value).toEqual([]);
+  });
+
+  it('keeps dangerous capabilities disabled in every public example', () => {
     for (const file of parameterFiles) {
       const parsed = JSON.parse(read(`infra/parameters/${file}`)) as {
         parameters: Record<string, { value: unknown }>;
       };
       expect(parsed.parameters['enableMutations']?.value, file).toBe(false);
       expect(parsed.parameters['enableDeployments']?.value, file).toBe(false);
+      expect(parsed.parameters['enableMcpHttp']?.value, file).toBe(false);
       expect(parsed.parameters['tenantDeploymentsEnabled']?.value, file).toBe(false);
       expect(parsed.parameters['bicepRemoteModulesEnabled']?.value, file).toBe(false);
       expect(parsed.parameters['mutationConfirmationRequired']?.value, file).toBe(true);
@@ -98,11 +131,45 @@ describe('per-environment parameter files', () => {
 });
 
 describe('release scripts', () => {
-  it('both provisioning and release consume the same authoritative parameter file', () => {
+  it.each(['scripts/bootstrap/provision.sh', 'scripts/bootstrap/deploy.sh'])(
+    '%s rejects missing external parameter input before invoking tools',
+    (script) => {
+      const result = spawnSync(bashExecutable, [script, 'example-subscription'], {
+        cwd: fileURLToPath(root),
+        encoding: 'utf8',
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('<parameter-file>');
+    },
+  );
+
+  it.each(['scripts/bootstrap/provision.sh', 'scripts/bootstrap/deploy.sh'])(
+    '%s rejects a nonexistent parameter path before invoking tools',
+    (script) => {
+      const result = spawnSync(
+        bashExecutable,
+        [script, 'example-subscription', 'missing.parameters.json', 'example-region'],
+        {
+          cwd: fileURLToPath(root),
+          encoding: 'utf8',
+        },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('Parameter file not found: missing.parameters.json');
+    },
+  );
+
+  it('both provisioning and release consume the same explicit parameter path', () => {
     for (const script of [provisionSh, deploySh]) {
-      expect(script).toContain('parameter_file');
+      expect(script).toContain('PARAMETER_PATH="${2:?usage:');
+      expect(script).toContain('PARAMETERS="$(parameter_file "${PARAMETER_PATH}")"');
       expect(script).toContain('--parameters "@${PARAMETERS}"');
     }
+    expect(commonSh).not.toContain('infra/parameters/${environment}.parameters.json');
   });
 
   it('the release only overrides values that are computed at release time', () => {
@@ -135,7 +202,7 @@ describe('release scripts', () => {
     expect(commonSh).toContain('az account show');
     expect(commonSh).toContain('Requested subscription');
     for (const script of [provisionSh, deploySh]) {
-      expect(script).toContain('preflight "${SUBSCRIPTION_ID}" "${ENVIRONMENT}"');
+      expect(script).toContain('preflight "${SUBSCRIPTION_ID}" "${ENVIRONMENT}" "${PARAMETERS}"');
     }
   });
 
@@ -149,6 +216,23 @@ describe('release scripts', () => {
     for (const script of [provisionSh, deploySh, commonSh]) {
       expect(script).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
       expect(script).not.toMatch(/LOCATION="\$\{3:-[a-z]+\}"/);
+    }
+  });
+
+  it('cannot regain a silent canonical environment default', () => {
+    expect(mainBicep).toMatch(/^param environmentName string$/m);
+    expect(mainBicep).not.toMatch(/^param environmentName string\s*=/m);
+    for (const environment of canonicalOperatorEnvironments) {
+      expect(commonSh).not.toContain(`${environment}.parameters.json`);
+      expect(provisionSh).not.toContain(`${environment}.parameters.json`);
+      expect(deploySh).not.toContain(`${environment}.parameters.json`);
+    }
+  });
+
+  it('documents operator-owned input instead of repository-owned environments', () => {
+    for (const document of [deploymentGuide, readme]) {
+      expect(document).toContain('<parameter-file>');
+      expect(document).not.toContain('infra/parameters/<environment>.parameters.json');
     }
   });
 });

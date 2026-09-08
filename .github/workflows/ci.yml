@@ -210,9 +210,9 @@ jobs:
             az bicep lint --file "$template"
           done
 
-      - name: Check parameter files against the template
+      - name: Check safe parameter examples against the template
         run: |
-          for file in infra/parameters/*.parameters.json; do
+          for file in infra/parameters/*.example.parameters.json; do
             echo "Checking $file"
             python3 - "$file" <<'PY'
           import json, sys

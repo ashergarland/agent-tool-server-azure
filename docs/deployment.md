@@ -7,7 +7,8 @@ the server access to real resources.
 ## Contents
 
 - [What gets deployed](#what-gets-deployed)
-- [Configuration is the parameter file](#configuration-is-the-parameter-file)
+- [Operator-owned deployment parameters](#operator-owned-deployment-parameters)
+- [Migrating existing operator state](#migrating-existing-operator-state)
 - [Prerequisites](#prerequisites)
 - [First deployment](#first-deployment)
 - [Releasing a new image](#releasing-a-new-image)
@@ -42,11 +43,16 @@ The operator identity receives `Reader` and `Monitoring Reader`. The custom oper
 assigned when `enableMutations=true`, and the deployment runner role only when
 `enableDeployments=true`.
 
-## Configuration is the parameter file
+## Operator-owned deployment parameters
 
-Each environment has an authoritative parameter file at
-`infra/parameters/<environment>.parameters.json`. **Both** provisioning and release pass that file
-on every deployment.
+This public capability repository owns the reusable Bicep template, deployment scripts, parameter
+format and safe examples. It does not own any operator environment or its desired state.
+
+Keep each real deployment's non-secret ARM parameter file in private operator state, outside this
+repository. That private state also selects the environment name, pins the exact capability source
+commit to deploy, and records the subscription and region supplied to the scripts. Both provisioning
+and release require the operator to pass that parameter-file path explicitly; neither script looks up
+an environment or chooses a default.
 
 This matters. A deployment that specifies only some parameters silently resets the rest to the
 template's defaults — which is how an image-only release used to wipe out resource group
@@ -54,14 +60,40 @@ restrictions, mutation state, alert configuration, replica counts and tags. The 
 therefore overrides exactly four values, all of which are genuinely computed at release time:
 `image`, `gitSha`, `serviceVersion` and `publicBaseUrl`.
 
-To change how an environment is configured, edit its parameter file, commit it, and run a release.
-Never pass one-off `--parameters` on the command line to make a change stick.
+To change a deployment, update and review its file in private desired state, then run a release with
+that same path. Never pass one-off `--parameters` on the command line to make a change stick. The
+format remains the existing ARM deployment parameter format; this repository does not define a
+broader deployment-profile contract.
 
-Two things are deliberately _not_ in the parameter files, so the repository stays account-neutral:
+The public `infra/parameters/nonlive.example.parameters.json` file is deliberately named as an
+example, selects only the synthetic `example` label, has an empty subscription scope and keeps
+mutations, generic deployments, remote MCP and alerts disabled. It is a shape and safety reference,
+not operator desired state. Create a separate file in private storage for any real deployment.
 
-- **Region.** Passed as an argument to the scripts and picked up by `deployment().location`.
-- **`allowedSubscriptionIds`.** Omitted, so it defaults to the subscription being deployed into. Set
-  it explicitly in your fork's parameter file if the server should see more than one subscription.
+The region remains an explicit script argument and is picked up by `deployment().location`. Real
+operator state should set `allowedSubscriptionIds` and every other setting whose value it intends to
+preserve rather than relying on template defaults.
+
+Secret values never belong in this file. The bootstrap script generates the caller API key directly
+into Azure Key Vault, and workload credentials remain provider-managed identities or provider secret
+stores.
+
+## Migrating existing operator state
+
+1. Create a private desired-state location that is reviewed and access-controlled for the operator.
+2. Create a non-secret ARM parameter file there, using the public non-live example only as a
+   structural guide. Populate it from the operator's approved current desired state without routing
+   values through a public branch, issue, log or pull request.
+3. Record the full capability-repository commit to check out alongside the private parameter-file
+   path, target subscription and region. The release script continues to stamp that full Git SHA and
+   deploy an immutable image digest.
+4. Leave API keys, workload credentials and all other secrets in Azure Key Vault, managed identities
+   or the applicable provider secret store. Reference provider-managed secret locations only where
+   the existing deployment mechanics require it.
+5. Run provisioning and releases with the private path shown below, review validation and what-if
+   output, and retire automation that referred to repository-owned environment files.
+
+Do not copy former public environment values into the non-live example or back into this repository.
 
 ## Prerequisites
 
@@ -92,14 +124,14 @@ az provider register --namespace Microsoft.Storage
 From the repository root:
 
 ```bash
-./scripts/bootstrap/provision.sh <subscription-id> <environment> <region>
-./scripts/bootstrap/deploy.sh    <subscription-id> <environment> <region>
+./scripts/bootstrap/provision.sh <subscription-id> <parameter-file> <region>
+./scripts/bootstrap/deploy.sh    <subscription-id> <parameter-file> <region>
 ```
 
 Both scripts:
 
 1. verify you are signed in, and that the CLI resolved the subscription you asked for;
-2. print the subscription, tenant, signed-in user and parameter file;
+2. print the subscription, tenant, signed-in user and explicit parameter file;
 3. validate the template;
 4. run what-if and summarise the changes by type;
 5. list any resource that would be **deleted** and require an extra confirmation; and
@@ -119,7 +151,7 @@ with any client.
 ## Releasing a new image
 
 ```bash
-./scripts/bootstrap/deploy.sh <subscription-id> <environment> <region>
+./scripts/bootstrap/deploy.sh <subscription-id> <parameter-file> <region>
 ```
 
 The release:
@@ -128,15 +160,15 @@ The release:
 - builds in ACR with an immutable tag derived from the commit (`sha-<12 hex>`);
 - resolves the manifest **digest** and deploys `registry/repository@sha256:…`, so what runs cannot
   change underneath a tag;
-- passes the environment's parameter file, preserving every setting;
+- passes the operator's parameter file, preserving every setting;
 - verifies `/health`, then `/ready`, then that `/version` reports the git SHA that was just built.
 
 If `/ready` reports a component as `unavailable` the release fails and prints the component report.
 
 ## Enabling guarded operations
 
-1. Set `"enableMutations": { "value": true }` in the environment's parameter file.
-2. Commit and run a release.
+1. Set `"enableMutations": { "value": true }` in the private operator parameter file.
+2. Review the private desired-state change and run a release with that file's path.
 
 This assigns the custom operator role — restart a VM, start a VM, restart a site, write tags — and
 sets `MUTATIONS_ENABLED=true`. Callers must still pass `confirm: true` on every state-changing call.
@@ -156,7 +188,7 @@ This is the highest-privilege capability the server has. Enable it deliberately.
    docker run --rm --entrypoint cat atsa /usr/local/share/bicep.sha256
    ```
 
-2. In the parameter file set:
+2. In the private operator parameter file set:
 
    ```jsonc
    "enableDeployments": { "value": true },
@@ -237,8 +269,8 @@ Then set `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` as rep
 `permissions: { id-token: write, contents: read }`, and use `azure/login@v2` with
 `enable-AzPSSession: false`.
 
-Nothing in this repository assumes a particular tenant, subscription or region: every fork
-configures its own.
+Nothing in this repository assumes a particular tenant, subscription, region or operator
+environment. Private desired state configures those selections explicitly.
 
 ## Rotating the API key
 
@@ -271,8 +303,8 @@ comma-separated list, so you can run two keys briefly to make a zero-downtime ro
   | project TimeGenerated, Log_s
   ```
 
-Set `enableHealthAlerts` with `alertEmails` or `alertSmsPhone` at deployment time to get an
-availability test and alert. Do not commit personal contact details to a parameter file.
+Set `enableHealthAlerts` with `alertEmails` or `alertSmsPhone` in private operator state to get an
+availability test and alert. Do not commit personal contact details to this public repository.
 
 ## Cost and scale
 
@@ -316,7 +348,7 @@ every one names its principal, scope and reason.
 | `/ready` returns 503 with `bicepCompiler: unavailable`   | `BICEP_CLI_PATH` is wrong, the binary's digest does not match `BICEP_CLI_SHA256`, or the image is missing the compiler's native dependencies. The Bicep CLI is a self-contained .NET binary: on a musl base it needs `icu-libs`, `icu-data-full`, `libstdc++` and `libgcc`, and without them it aborts on startup with "Couldn't find a valid ICU package". |
 | `/ready` returns 503 with `deploymentStore: unavailable` | The deployment identity lacks _Storage Table Data Contributor_, or the endpoint is wrong.                                                                                                                                                                                                                                                                   |
 | `403` from a read tool                                   | The subscription or resource group is outside the allow-list, or the operator identity has no RBAC there.                                                                                                                                                                                                                                                   |
-| `403` mentioning `MUTATIONS_ENABLED`                     | The environment was deployed read-only. Change the parameter file and release.                                                                                                                                                                                                                                                                              |
+| `403` mentioning `MUTATIONS_ENABLED`                     | The environment was deployed read-only. Change the private operator parameter file and release with its explicit path.                                                                                                                                                                                                                                      |
 | `conflict` on deploy                                     | Source, parameters, scope or mode differ from the preview. Re-run what-if and get approval again.                                                                                                                                                                                                                                                           |
 | `bad_request` about an expired preview                   | The confirmation hash is older than `DEPLOYMENT_PREVIEW_TTL_MS`. Re-run what-if.                                                                                                                                                                                                                                                                            |
 | `conflict` about a deployment in progress                | Another deployment holds the scope lock. Wait for it.                                                                                                                                                                                                                                                                                                       |
