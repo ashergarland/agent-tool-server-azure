@@ -34,7 +34,8 @@ fi
 GIT_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
 SHORT_SHA="${GIT_SHA:0:12}"
 VERSION="$(node -p "require('${REPO_ROOT}/package.json').version")"
-RESOURCE_GROUP="rg-agent-tool-server-azure-${ENVIRONMENT}"
+RESOURCE_GROUP="$(parameter_value_or_default \
+  "${PARAMETERS}" resourceGroupName "rg-agent-tool-server-azure-${ENVIRONMENT}")"
 
 REGISTRY_NAME="$(az acr list --resource-group "${RESOURCE_GROUP}" --query '[0].name' --output tsv)"
 [[ -n "${REGISTRY_NAME}" ]] || die "No container registry in ${RESOURCE_GROUP}. Run provision.sh first."

@@ -74,6 +74,10 @@ The region remains an explicit script argument and is picked up by `deployment()
 operator state should set `allowedSubscriptionIds` and every other setting whose value it intends to
 preserve rather than relying on template defaults.
 
+The release script also reads an explicitly supplied `resourceGroupName` from that file when locating
+the existing registry and Container App. If it is omitted, the script uses the template's
+`rg-agent-tool-server-azure-<environmentName>` default.
+
 Secret values never belong in this file. The bootstrap script generates the caller API key directly
 into Azure Key Vault, and workload credentials remain provider-managed identities or provider secret
 stores.

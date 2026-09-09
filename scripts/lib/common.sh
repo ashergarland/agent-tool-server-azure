@@ -70,6 +70,23 @@ required_parameter_value() {
   printf '%s' "${value}"
 }
 
+# Reads an optional non-empty string, falling back only when the parameter is absent.
+parameter_value_or_default() {
+  local path="$1" name="$2" fallback="$3"
+  local has_parameter
+  if ! has_parameter="$(jq -r --arg name "${name}" \
+    'if (.parameters | type) != "object" then error("missing parameters object") else (.parameters | has($name)) end' \
+    "${path}")"; then
+    die "Parameter file ${path} must contain a parameters object."
+  fi
+
+  if [[ "${has_parameter}" == "true" ]]; then
+    required_parameter_value "${path}" "${name}"
+  else
+    printf '%s' "${fallback}"
+  fi
+}
+
 # Fails fast when the shell is pointed at a different subscription or tenant than intended.
 # Deploying into the wrong subscription is the one mistake these scripts cannot undo for you.
 preflight() {

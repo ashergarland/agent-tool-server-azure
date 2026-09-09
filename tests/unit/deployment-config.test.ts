@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { envSchema } from '../../src/config/index.js';
@@ -33,6 +34,28 @@ const bashExecutable = (() => {
   }
   return 'bash';
 })();
+
+const runParameterValueOrDefault = (parameters: Record<string, unknown>, fallback: string) => {
+  const directory = mkdtempSync(join(tmpdir(), 'azure-operator-parameters-'));
+  const parameterPath = join(directory, 'operator.parameters.json');
+  writeFileSync(parameterPath, JSON.stringify({ parameters }));
+
+  try {
+    return spawnSync(
+      bashExecutable,
+      [
+        '-c',
+        'source scripts/lib/common.sh; parameter_value_or_default "$1" resourceGroupName "$2"',
+        'parameter-value-test',
+        parameterPath.replaceAll('\\', '/'),
+        fallback,
+      ],
+      { cwd: fileURLToPath(root), encoding: 'utf8' },
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+};
 
 const declaredParameters = new Set(
   [...mainBicep.matchAll(/^param\s+([A-Za-z0-9_]+)\s/gm)].map((match) => match[1] as string),
@@ -170,6 +193,35 @@ describe('release scripts', () => {
       expect(script).toContain('--parameters "@${PARAMETERS}"');
     }
     expect(commonSh).not.toContain('infra/parameters/${environment}.parameters.json');
+  });
+
+  it('uses an operator-supplied resource group and otherwise matches the Bicep default', () => {
+    const custom = runParameterValueOrDefault(
+      { resourceGroupName: { value: 'rg-operator-selected' } },
+      'rg-agent-tool-server-azure-example',
+    );
+    const fallback = runParameterValueOrDefault({}, 'rg-agent-tool-server-azure-example');
+    const invalid = runParameterValueOrDefault(
+      { resourceGroupName: { value: 42 } },
+      'rg-agent-tool-server-azure-example',
+    );
+
+    expect(custom.error).toBeUndefined();
+    expect(custom.status).toBe(0);
+    expect(custom.stdout).toBe('rg-operator-selected');
+    expect(fallback.error).toBeUndefined();
+    expect(fallback.status).toBe(0);
+    expect(fallback.stdout).toBe('rg-agent-tool-server-azure-example');
+    expect(invalid.error).toBeUndefined();
+    expect(invalid.status).not.toBe(0);
+    expect(invalid.stderr).toContain(
+      'must define a non-empty string at .parameters.resourceGroupName.value',
+    );
+    expect(deploySh).toContain('RESOURCE_GROUP="$(parameter_value_or_default \\');
+    expect(deploySh).toContain(
+      '"${PARAMETERS}" resourceGroupName "rg-agent-tool-server-azure-${ENVIRONMENT}")"',
+    );
+    expect(deploySh).not.toContain('RESOURCE_GROUP="rg-agent-tool-server-azure-${ENVIRONMENT}"');
   });
 
   it('the release only overrides values that are computed at release time', () => {
