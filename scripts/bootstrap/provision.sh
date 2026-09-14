@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# Provisions the agent-tool-server-azure infrastructure for one environment and stores a freshly
-# generated API key in Key Vault.
+# Provisions the agent-tool-server-azure infrastructure from operator-supplied desired state and
+# stores a freshly generated API key in Key Vault.
 #
 # Usage:
-#   ./scripts/bootstrap/provision.sh <subscription-id> <environment> <location>
+#   ./scripts/bootstrap/provision.sh <subscription-id> <parameter-file> <location>
 #
-# The environment must have a parameter file at infra/parameters/<environment>.parameters.json.
-# That file is the authority for the environment's configuration; this script never invents values.
+# The non-secret parameter file is the authority for the deployment's configuration and should live
+# in private operator state, outside this public repository. This script never selects an environment.
 #
 # Requires: az CLI (signed in), jq, openssl.
 
@@ -16,13 +16,14 @@ set -euo pipefail
 # shellcheck source=../lib/common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
 
-SUBSCRIPTION_ID="${1:?usage: provision.sh <subscription-id> <environment> <location>}"
-ENVIRONMENT="${2:?usage: provision.sh <subscription-id> <environment> <location>}"
-LOCATION="${3:?usage: provision.sh <subscription-id> <environment> <location>}"
+SUBSCRIPTION_ID="${1:?usage: provision.sh <subscription-id> <parameter-file> <location>}"
+PARAMETER_PATH="${2:?usage: provision.sh <subscription-id> <parameter-file> <location>}"
+LOCATION="${3:?usage: provision.sh <subscription-id> <parameter-file> <location>}"
+PARAMETERS="$(parameter_file "${PARAMETER_PATH}")"
 
 require_tools az jq openssl
-PARAMETERS="$(parameter_file "${ENVIRONMENT}")"
-preflight "${SUBSCRIPTION_ID}" "${ENVIRONMENT}"
+ENVIRONMENT="$(required_parameter_value "${PARAMETERS}" environmentName)"
+preflight "${SUBSCRIPTION_ID}" "${ENVIRONMENT}" "${PARAMETERS}"
 confirm "Provision the '${ENVIRONMENT}' environment in ${LOCATION}?"
 
 STAMP="$(date -u +%Y%m%d%H%M%S)"
@@ -120,7 +121,7 @@ then.
 
 Next steps:
   1. Build and release the real image:
-       ./scripts/bootstrap/deploy.sh ${SUBSCRIPTION_ID} ${ENVIRONMENT} ${LOCATION}
+       ./scripts/bootstrap/deploy.sh ${SUBSCRIPTION_ID} "${PARAMETERS}" ${LOCATION}
   2. Point your client at ${SERVER_URL}/openapi.json (HTTP) or ${SERVER_URL}/mcp (remote MCP),
      using the API key from Key Vault as the bearer token.
 SUMMARY

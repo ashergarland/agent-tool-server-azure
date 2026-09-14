@@ -414,16 +414,22 @@ docker run --rm --entrypoint cat agent-tool-server-azure /usr/local/share/bicep.
 
 ## Deploying to Azure
 
-Infrastructure lives in `infra/` (Bicep, subscription-scoped). Each environment has an authoritative
-parameter file under `infra/parameters/`, which **both** provisioning and release pass on every
-deployment — that is what stops an image-only release from resetting settings to template defaults.
+Infrastructure lives in `infra/` (Bicep, subscription-scoped). This public repository owns the
+reusable template and deployment mechanics, not an operator's desired state. Both provisioning and
+release require an explicit path to an operator-owned, non-secret parameter file outside the public
+repository. Passing that same file on every deployment stops an image-only release from resetting
+settings to template defaults.
+
+`infra/parameters/nonlive.example.parameters.json` is an intentionally non-live, scope-empty example,
+not a deployment environment. Copy its shape into private desired state and replace it there; do not
+turn the public example into live configuration. Secret values remain in Azure Key Vault.
 
 ```bash
 # Provision infrastructure and generate the API key
-./scripts/bootstrap/provision.sh <subscription-id> prod <region>
+./scripts/bootstrap/provision.sh <subscription-id> <parameter-file> <region>
 
 # Build the image in ACR and release it by digest
-./scripts/bootstrap/deploy.sh <subscription-id> prod <region>
+./scripts/bootstrap/deploy.sh <subscription-id> <parameter-file> <region>
 ```
 
 Both scripts run an account and tenant preflight, validate the template, show a what-if preview,
@@ -452,7 +458,7 @@ src/
   openapi/               OpenAPI 3.1 generation
   mcp/                   MCP registry adapter, stdio entry point, Streamable HTTP handler
   util/                  logging, metrics, concurrency
-infra/                   Bicep templates, modules and per-environment parameter files
+infra/                   Bicep templates, modules and a non-live parameter example
 scripts/                 provisioning, release, OpenAPI emit and check
 tests/                   unit and integration tests
 server.json              MCP registry metadata

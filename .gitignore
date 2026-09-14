@@ -24,3 +24,8 @@ deployment-records/
 .azure/
 azure.local.json
 *.local.parameters.json
+
+# Operator desired state stays outside this public repository. Only explicitly named examples belong
+# under infra/parameters.
+infra/parameters/*.parameters.json
+!infra/parameters/*.example.parameters.json

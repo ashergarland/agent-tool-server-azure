@@ -2,10 +2,9 @@
 #
 # Shared helpers for the bootstrap and release scripts.
 #
-# The single most important rule here: the per-environment parameter file under infra/parameters is
-# the authority for what an environment is configured to be. Every deployment passes that file, so a
-# release can never quietly reset a setting to a Bicep default just because the command line did not
-# mention it.
+# The operator-supplied parameter file is the authority for a deployment. Every deployment passes the
+# explicit path unchanged, so the public repository never chooses an environment and a release cannot
+# quietly reset a setting merely because the command line did not mention it.
 
 set -euo pipefail
 
@@ -47,25 +46,51 @@ require_tools() {
 }
 
 parameter_file() {
-  local environment="$1"
-  local path="${REPO_ROOT}/infra/parameters/${environment}.parameters.json"
-  [[ -f "${path}" ]] || die "No parameter file for environment '${environment}'. Expected ${path}"
+  local supplied_path="${1-}"
+  [[ -n "${supplied_path}" ]] || die "An explicit operator parameter-file path is required."
+  [[ -f "${supplied_path}" ]] || die "Parameter file not found: ${supplied_path}"
+
+  local directory path
+  directory="$(cd "$(dirname "${supplied_path}")" && pwd)"
+  path="${directory}/$(basename "${supplied_path}")"
+  if command -v cygpath >/dev/null 2>&1; then
+    path="$(cygpath -m "${path}")"
+  fi
   printf '%s' "${path}"
 }
 
-# Reads one value out of the authoritative parameter file.
-parameter_value() {
-  local environment="$1" name="$2" fallback="${3-}"
+# Reads a required non-empty string out of the operator's parameter file.
+required_parameter_value() {
+  local path="$1" name="$2"
   local value
-  value="$(jq -r --arg name "${name}" '.parameters[$name].value // empty' \
-    "$(parameter_file "${environment}")")"
-  printf '%s' "${value:-${fallback}}"
+  if ! value="$(jq -er --arg name "${name}" \
+    '.parameters[$name].value | select(type == "string" and length > 0)' "${path}")"; then
+    die "Parameter file ${path} must define a non-empty string at .parameters.${name}.value"
+  fi
+  printf '%s' "${value}"
+}
+
+# Reads an optional non-empty string, falling back only when the parameter is absent.
+parameter_value_or_default() {
+  local path="$1" name="$2" fallback="$3"
+  local has_parameter
+  if ! has_parameter="$(jq -r --arg name "${name}" \
+    'if (.parameters | type) != "object" then error("missing parameters object") else (.parameters | has($name)) end' \
+    "${path}")"; then
+    die "Parameter file ${path} must contain a parameters object."
+  fi
+
+  if [[ "${has_parameter}" == "true" ]]; then
+    required_parameter_value "${path}" "${name}"
+  else
+    printf '%s' "${fallback}"
+  fi
 }
 
 # Fails fast when the shell is pointed at a different subscription or tenant than intended.
 # Deploying into the wrong subscription is the one mistake these scripts cannot undo for you.
 preflight() {
-  local subscription_id="$1" environment="$2"
+  local subscription_id="$1" environment="$2" parameters="$3"
 
   az account show >/dev/null 2>&1 || die "Not signed in. Run 'az login' first."
   az account set --subscription "${subscription_id}"
@@ -85,7 +110,7 @@ preflight() {
   Subscription     ${actual_name} (${actual_id})
   Tenant           ${tenant_id}
   Signed in as     ${user}
-  Parameter file   $(parameter_file "${environment}")
+  Parameter file   ${parameters}
 PREFLIGHT
 }
 

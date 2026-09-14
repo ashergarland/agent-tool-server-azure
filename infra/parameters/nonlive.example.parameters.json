@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": { "value": "example" },
+    "allowedSubscriptionIds": { "value": [] },
+    "allowedResourceGroups": { "value": [] },
+    "allowedManagementGroupIds": { "value": [] },
+    "tenantDeploymentsEnabled": { "value": false },
+    "verifyRbac": { "value": true },
+    "enableMutations": { "value": false },
+    "mutationConfirmationRequired": { "value": true },
+    "enableMcpHttp": { "value": false },
+    "enableDeployments": { "value": false },
+    "bicepRemoteModulesEnabled": { "value": false },
+    "cpu": { "value": "0.5" },
+    "memory": { "value": "1Gi" },
+    "minReplicas": { "value": 0 },
+    "maxReplicas": { "value": 1 },
+    "logLevel": { "value": "info" },
+    "enableHealthAlerts": { "value": false },
+    "tags": {
+      "value": {
+        "purpose": "non-live-example"
+      }
+    }
+  }
+}

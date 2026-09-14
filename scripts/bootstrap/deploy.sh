@@ -3,12 +3,12 @@
 # Builds the server image in Azure Container Registry and releases it to an existing environment.
 #
 # Usage:
-#   ./scripts/bootstrap/deploy.sh <subscription-id> <environment> <location>
+#   ./scripts/bootstrap/deploy.sh <subscription-id> <parameter-file> <location>
 #
 # This is an image-only release. Everything except the image, its digest, the git SHA, the service
-# version and the public URL comes from infra/parameters/<environment>.parameters.json, which is
-# passed on every deployment. That is what stops a release from resetting resource group
-# restrictions, mutation state, deployment state, alerts, replicas or tags back to Bicep defaults.
+# version and the public URL comes from the explicit operator-supplied parameter file, which is passed
+# on every deployment. That stops a release from resetting resource group restrictions, mutation
+# state, deployment state, alerts, replicas or tags back to Bicep defaults.
 #
 # Requires: az CLI (signed in), jq, git, node.
 
@@ -17,13 +17,14 @@ set -euo pipefail
 # shellcheck source=../lib/common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
 
-SUBSCRIPTION_ID="${1:?usage: deploy.sh <subscription-id> <environment> <location>}"
-ENVIRONMENT="${2:?usage: deploy.sh <subscription-id> <environment> <location>}"
-LOCATION="${3:?usage: deploy.sh <subscription-id> <environment> <location>}"
+SUBSCRIPTION_ID="${1:?usage: deploy.sh <subscription-id> <parameter-file> <location>}"
+PARAMETER_PATH="${2:?usage: deploy.sh <subscription-id> <parameter-file> <location>}"
+LOCATION="${3:?usage: deploy.sh <subscription-id> <parameter-file> <location>}"
+PARAMETERS="$(parameter_file "${PARAMETER_PATH}")"
 
 require_tools az jq git node
-PARAMETERS="$(parameter_file "${ENVIRONMENT}")"
-preflight "${SUBSCRIPTION_ID}" "${ENVIRONMENT}"
+ENVIRONMENT="$(required_parameter_value "${PARAMETERS}" environmentName)"
+preflight "${SUBSCRIPTION_ID}" "${ENVIRONMENT}" "${PARAMETERS}"
 
 if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]]; then
   warn "The working tree has uncommitted changes; the recorded git SHA will not describe the image."
@@ -33,7 +34,8 @@ fi
 GIT_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
 SHORT_SHA="${GIT_SHA:0:12}"
 VERSION="$(node -p "require('${REPO_ROOT}/package.json').version")"
-RESOURCE_GROUP="rg-agent-tool-server-azure-${ENVIRONMENT}"
+RESOURCE_GROUP="$(parameter_value_or_default \
+  "${PARAMETERS}" resourceGroupName "rg-agent-tool-server-azure-${ENVIRONMENT}")"
 
 REGISTRY_NAME="$(az acr list --resource-group "${RESOURCE_GROUP}" --query '[0].name' --output tsv)"
 [[ -n "${REGISTRY_NAME}" ]] || die "No container registry in ${RESOURCE_GROUP}. Run provision.sh first."

@@ -6,15 +6,15 @@ operations, one used only for deployments), a container registry, a Key Vault ho
 callers present, a Log Analytics workspace, optional record storage, custom least-privilege roles,
 and the Container App that runs the image.
 
-Nothing here is account specific. Every scope, identity, limit and toggle is a parameter, and the
-per-environment parameter files under infra/parameters are the single authority for what a given
-environment is configured to be.
+Nothing here is account specific. Every scope, identity, limit and toggle is a parameter. Operators
+supply their desired state through an explicit parameter file kept outside this public repository;
+infra/parameters contains only a non-live example.
 '''
 
-@description('Short environment name used to derive resource names, e.g. prod or dev.')
+@description('Operator-supplied deployment name used to derive resource names.')
 @minLength(2)
 @maxLength(10)
-param environmentName string = 'prod'
+param environmentName string
 
 @description('Azure region for all server resources.')
 param location string = deployment().location
