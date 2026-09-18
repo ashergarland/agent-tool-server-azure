@@ -28,5 +28,6 @@ export const createDeploymentRecordStore = (config: AppConfig): DeploymentRecord
     recordsTable: config.deployments.store.recordsTable,
     locksTable: config.deployments.store.locksTable,
     lockTtlMs: config.deployments.store.lockTtlMs,
+    requestTimeoutMs: config.azure.armRequestTimeoutMs,
   });
 };

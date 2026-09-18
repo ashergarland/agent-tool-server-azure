@@ -113,6 +113,26 @@ describe('inspectTemplate', () => {
     );
   });
 
+  it('rejects a denied child resource whose type is relative to its parent', () => {
+    rejects(
+      withResources([
+        {
+          type: 'Microsoft.Compute/virtualMachines',
+          apiVersion: '2024-03-01',
+          name: 'vm',
+          resources: [
+            {
+              type: 'extensions',
+              apiVersion: '2024-03-01',
+              name: 'custom',
+            },
+          ],
+        },
+      ]),
+      /Microsoft\.Compute\/virtualMachines\/extensions is not permitted/,
+    );
+  });
+
   it('rejects linked templates', () => {
     rejects(
       withResources([
@@ -231,6 +251,43 @@ describe('inspectTemplate', () => {
         managementGroupId: undefined,
       },
     ]);
+  });
+
+  it('rejects opaque explicit scopes that cannot be checked against allow-lists', () => {
+    rejects(
+      withResources([
+        {
+          type: 'Microsoft.Authorization/roleAssignments',
+          apiVersion: '2022-04-01',
+          name: 'assignment',
+          scope:
+            "[format('/providers/Microsoft.Management/managementGroups/{0}', parameters('target'))]",
+        },
+      ]),
+      /explicit scope that cannot be resolved/,
+    );
+  });
+
+  it('rejects computed nested deployment scope fields', () => {
+    rejects(
+      withResources([
+        {
+          type: 'Microsoft.Resources/deployments',
+          apiVersion: '2024-03-01',
+          name: 'computed-scope',
+          subscriptionId: "[parameters('targetSubscription')]",
+          properties: {
+            mode: 'Incremental',
+            template: {
+              $schema:
+                'https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#',
+              resources: [],
+            },
+          },
+        },
+      ]),
+      /computed subscriptionId/,
+    );
   });
 
   it('warns about privileged resource types without blocking them', () => {

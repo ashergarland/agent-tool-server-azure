@@ -1,4 +1,4 @@
-import { AppError } from '../../errors.js';
+import { AppError } from '@agent-tool-platform/runtime/errors';
 import type {
   ArmDeploymentOperation,
   ArmDeploymentOperationPage,
@@ -157,18 +157,22 @@ export class ArmDeploymentClient {
   }
 
   public async whatIf(request: ArmDeploymentRequest): Promise<ArmWhatIfResult> {
+    const deadline = this.now() + this.options.whatIfTimeoutMs;
     const path = `${deploymentBasePath(request.scope)}/${encodeURIComponent(request.deploymentName)}/whatIf`;
     const response = await this.rest.post<WhatIfResponse>(path, {
       query: { 'api-version': DEPLOYMENTS_API_VERSION },
       body: this.body(request),
       signal: request.signal,
+      timeoutMs: this.remainingWhatIfMs(deadline),
     });
+    this.remainingWhatIfMs(deadline);
 
     const settled =
       response.status === 202
         ? await this.pollWhatIf(
             response.headers['location'] ?? response.headers['azure-asyncoperation'],
             request.signal,
+            deadline,
           )
         : response.body;
 
@@ -191,6 +195,7 @@ export class ArmDeploymentClient {
   private async pollWhatIf(
     location: string | undefined,
     signal: AbortSignal | undefined,
+    deadline: number,
   ): Promise<WhatIfResponse | undefined> {
     if (!location) {
       throw new AppError(
@@ -199,17 +204,26 @@ export class ArmDeploymentClient {
       );
     }
     this.assertArmUrl(location);
-    const deadline = this.now() + this.options.whatIfTimeoutMs;
-    while (this.now() < deadline) {
-      await this.sleep(this.options.pollIntervalMs);
+    for (;;) {
+      await this.sleep(Math.min(this.options.pollIntervalMs, this.remainingWhatIfMs(deadline)));
       if (signal?.aborted) throw new AppError('timeout', 'The what-if preview was cancelled');
-      const result = await this.rest.getRaw<WhatIfResponse>(location, { signal });
+      const result = await this.rest.getRaw<WhatIfResponse>(location, {
+        signal,
+        timeoutMs: this.remainingWhatIfMs(deadline),
+      });
       if (result.status !== 202) return result.body;
     }
-    throw new AppError(
-      'timeout',
-      'Azure did not finish the what-if preview within the allowed time',
-    );
+  }
+
+  private remainingWhatIfMs(deadline: number): number {
+    const remaining = deadline - this.now();
+    if (remaining <= 0) {
+      throw new AppError(
+        'timeout',
+        'Azure did not finish the what-if preview within the allowed time',
+      );
+    }
+    return remaining;
   }
 
   /**
@@ -244,10 +258,15 @@ export class ArmDeploymentClient {
     return toStatus(response.body ?? { name: request.deploymentName }, request.scope);
   }
 
-  public async get(scope: DeploymentScope, deploymentName: string): Promise<ArmDeploymentStatus> {
+  public async get(
+    scope: DeploymentScope,
+    deploymentName: string,
+    signal?: AbortSignal,
+  ): Promise<ArmDeploymentStatus> {
     const path = `${deploymentBasePath(scope)}/${encodeURIComponent(deploymentName)}`;
     const body = await this.rest.get<DeploymentResponse>(path, {
       query: { 'api-version': DEPLOYMENTS_API_VERSION },
+      signal,
     });
     return toStatus(body ?? { name: deploymentName }, scope);
   }
@@ -256,6 +275,7 @@ export class ArmDeploymentClient {
     scope: DeploymentScope,
     deploymentName: string,
     options: { readonly top: number; readonly skipToken: string | undefined },
+    signal?: AbortSignal,
   ): Promise<ArmDeploymentOperationPage> {
     const path = `${deploymentBasePath(scope)}/${encodeURIComponent(deploymentName)}/operations`;
     const body = await this.rest.get<OperationsResponse>(path, {
@@ -264,6 +284,7 @@ export class ArmDeploymentClient {
         $top: options.top,
         ...(options.skipToken === undefined ? {} : { $skiptoken: options.skipToken }),
       },
+      signal,
     });
 
     const operations: ArmDeploymentOperation[] = (body?.value ?? [])
@@ -288,10 +309,14 @@ export class ArmDeploymentClient {
     return { operations, skipToken: skipTokenFrom(body?.nextLink) };
   }
 
-  public async effectivePermissions(armScope: string): Promise<readonly EffectivePermission[]> {
+  public async effectivePermissions(
+    armScope: string,
+    signal?: AbortSignal,
+  ): Promise<readonly EffectivePermission[]> {
     const path = `${armScope.replace(/^\//, '')}/providers/Microsoft.Authorization/permissions`;
     const body = await this.rest.get<PermissionsResponse>(path, {
       query: { 'api-version': PERMISSIONS_API_VERSION },
+      signal,
     });
     return (body?.value ?? []).map((entry) => ({
       actions: entry.actions ?? [],

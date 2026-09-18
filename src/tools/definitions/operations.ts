@@ -24,7 +24,7 @@ export const restartVirtualMachineTool = defineTool({
       'The target is an App Service or Function App — use azure_restart_web_app.',
       'You have not yet confirmed the resource type with azure_get_resource.',
     ],
-    requiredScope: 'Restart permission on the virtual machine, inside the allow-listed scope.',
+    scope: 'Restart permission on the virtual machine, inside the allow-listed scope.',
     changesState: true,
     prerequisites: ['azure_get_resource', 'azure_get_resource_metrics'],
     nextSteps: ['azure_get_resource', 'azure_get_activity_log'],
@@ -37,9 +37,10 @@ export const restartVirtualMachineTool = defineTool({
       confirm: input.confirm,
       dryRun: input.dryRun,
       reason: input.reason,
-      principal: context.principal,
+      principal: context.principal.id,
       requestId: context.requestId,
       transport: context.transport,
+      signal: context.signal,
     }),
 });
 
@@ -59,7 +60,7 @@ export const startVirtualMachineTool = defineTool({
       'The machine is already running but misbehaving — use azure_restart_virtual_machine.',
       'The target is not a virtual machine.',
     ],
-    requiredScope: 'Start permission on the virtual machine, inside the allow-listed scope.',
+    scope: 'Start permission on the virtual machine, inside the allow-listed scope.',
     changesState: true,
     prerequisites: ['azure_get_resource'],
     nextSteps: ['azure_get_resource'],
@@ -72,9 +73,10 @@ export const startVirtualMachineTool = defineTool({
       confirm: input.confirm,
       dryRun: input.dryRun,
       reason: input.reason,
-      principal: context.principal,
+      principal: context.principal.id,
       requestId: context.requestId,
       transport: context.transport,
+      signal: context.signal,
     }),
 });
 
@@ -95,7 +97,7 @@ export const restartWebAppTool = defineTool({
       'The fault is a platform outage rather than the app — check ' +
         'azure_list_unhealthy_resources first.',
     ],
-    requiredScope: 'Restart permission on the site, inside the allow-listed scope.',
+    scope: 'Restart permission on the site, inside the allow-listed scope.',
     changesState: true,
     prerequisites: ['azure_get_resource'],
     nextSteps: ['azure_get_resource_metrics'],
@@ -108,9 +110,10 @@ export const restartWebAppTool = defineTool({
       confirm: input.confirm,
       dryRun: input.dryRun,
       reason: input.reason,
-      principal: context.principal,
+      principal: context.principal.id,
       requestId: context.requestId,
       transport: context.transport,
+      signal: context.signal,
     }),
 });
 
@@ -130,7 +133,7 @@ export const tagResourceTool = defineTool({
       'You want to remove a tag; this tool only merges and cannot delete tags.',
       'You intend to change any other resource configuration — use the Bicep deployment tools.',
     ],
-    requiredScope: 'Tag write permission on the resource, inside the allow-listed scope.',
+    scope: 'Tag write permission on the resource, inside the allow-listed scope.',
     changesState: true,
     prerequisites: ['azure_get_resource'],
   },
@@ -147,9 +150,10 @@ export const tagResourceTool = defineTool({
       confirm: input.confirm,
       dryRun: input.dryRun,
       reason: input.reason,
-      principal: context.principal,
+      principal: context.principal.id,
       requestId: context.requestId,
       transport: context.transport,
+      signal: context.signal,
     });
     return {
       action: result.action,

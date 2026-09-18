@@ -4,8 +4,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { Logger } from 'pino';
-import { createApplication } from '../../src/app.js';
-import { createMcpServer } from '../../src/mcp/server.js';
+import { createApplication, type Application } from '../../src/app.js';
 import { SERVER_INSTRUCTIONS } from '../../src/tools/instructions.js';
 import { testConfig } from '../helpers/config.js';
 import { createFakeCompiler } from '../helpers/bicep.js';
@@ -31,10 +30,11 @@ const sortByName = <T extends { name: string }>(tools: readonly T[]): T[] =>
   [...tools].sort((a, b) => (a.name < b.name ? -1 : 1));
 
 describe('transport parity', () => {
-  const app = build();
+  let app: Application;
   let baseUrl: string;
 
   beforeAll(async () => {
+    app = await build();
     await app.http.listen({ host: '127.0.0.1', port: 0 });
     const address = app.http.server.address();
     if (typeof address === 'string' || address === null) throw new Error('no address');
@@ -42,7 +42,7 @@ describe('transport parity', () => {
   });
 
   afterAll(async () => {
-    await app.http.close();
+    await app.shutdown();
   });
 
   const httpTools = async (): Promise<ToolSurface[]> => {
@@ -74,10 +74,7 @@ describe('transport parity', () => {
 
   const inMemoryClient = async <T>(run: (client: Client) => Promise<T>): Promise<T> => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const server = createMcpServer(app.config, app.registry, app.services, {
-      transport: 'mcp-stdio',
-      context: () => ({ requestId: 'test', principal: 'stdio:local' }),
-    });
+    const server = app.createStdioServer();
     await server.connect(serverTransport);
     try {
       return await withClient(clientTransport as unknown as Transport, run);

@@ -4,6 +4,8 @@
  * and error against a production subscription.
  */
 export const SERVER_INSTRUCTIONS = `
+Routing workflow: choose the narrowest Azure tool that answers the request, and do not probe tools by trial and error.
+
 You are operating a real Azure environment through a constrained control plane. Every call is
 authenticated, scope-checked against a configured allow-list, rate limited and audit logged. You
 cannot run shell commands, arbitrary REST calls or Azure CLI here: if a task is not expressible

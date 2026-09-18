@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtemp, mkdir, rm, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
-import { internalError } from '../errors.js';
+import { internalError } from '@agent-tool-platform/runtime/errors';
 import type { NormalizedBundle } from './types.js';
 
 export interface MaterializedBundle {

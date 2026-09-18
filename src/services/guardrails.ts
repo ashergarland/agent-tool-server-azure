@@ -1,5 +1,6 @@
 import type { AppConfig } from '../config/index.js';
-import { badRequest, forbidden } from '../errors.js';
+import { badRequest, forbidden } from '@agent-tool-platform/runtime/errors';
+import { MutationGate } from '@agent-tool-platform/runtime/mutations';
 import {
   resourceGroupFromResourceId,
   subscriptionIdFromResourceId,
@@ -53,7 +54,11 @@ export const scopeKeyOf = (scope: DeploymentScope): string =>
  * the connector is defined in exactly one place.
  */
 export class Guardrails {
-  public constructor(private readonly config: AppConfig) {}
+  private readonly mutationGate: MutationGate;
+
+  public constructor(private readonly config: AppConfig) {
+    this.mutationGate = new MutationGate(config.mutations);
+  }
 
   public get allowedSubscriptionIds(): readonly string[] {
     return this.config.azure.allowedSubscriptionIds;
@@ -64,7 +69,7 @@ export class Guardrails {
   }
 
   public get mutationsEnabled(): boolean {
-    return this.config.guardrails.mutationsEnabled;
+    return this.mutationGate.enabled;
   }
 
   public assertSubscriptionAllowed(subscriptionId: string): string {
@@ -120,19 +125,7 @@ export class Guardrails {
    * permitted at all.
    */
   public assertMutationAllowed(request: MutationRequest): boolean {
-    if (request.dryRun) return true;
-    if (!this.config.guardrails.mutationsEnabled) {
-      throw forbidden(
-        `Tool ${request.toolName} is a state-changing operation and MUTATIONS_ENABLED is false. ` +
-          'Re-run with dryRun=true to preview the action.',
-      );
-    }
-    if (this.config.guardrails.confirmationRequired && !request.confirm) {
-      throw badRequest(
-        `Tool ${request.toolName} changes Azure state and requires an explicit confirm=true from the user.`,
-      );
-    }
-    return false;
+    return this.mutationGate.isPreview(request);
   }
 
   /* ----------------------------------------------------------- deployments */
@@ -180,6 +173,12 @@ export class Guardrails {
       }
       case 'subscription': {
         const subscriptionId = this.requireAllowedSubscription(input.subscriptionId);
+        if (this.config.azure.allowedResourceGroups.length > 0) {
+          throw forbidden(
+            'Subscription-scope deployments are disabled while AZURE_ALLOWED_RESOURCE_GROUPS is ' +
+              'set because a subscription template can create resource groups outside that boundary.',
+          );
+        }
         return {
           kind: 'subscription',
           subscriptionId,
@@ -277,7 +276,18 @@ export class Guardrails {
    */
   public assertCrossScopeTargetsAllowed(targets: readonly CrossScopeTarget[]): void {
     for (const target of targets) {
-      if (target.subscriptionId) this.assertSubscriptionAllowed(target.subscriptionId);
+      if (target.subscriptionId) {
+        this.requireAllowedSubscription(target.subscriptionId);
+        if (
+          this.config.azure.allowedResourceGroups.length > 0 &&
+          target.resourceGroup === undefined
+        ) {
+          throw forbidden(
+            'Nested subscription-scope deployments are disabled while ' +
+              'AZURE_ALLOWED_RESOURCE_GROUPS is set.',
+          );
+        }
+      }
       if (target.resourceGroup) this.assertResourceGroupAllowed(target.resourceGroup);
       if (target.managementGroupId) {
         const allowed = this.config.azure.allowedManagementGroupIds;

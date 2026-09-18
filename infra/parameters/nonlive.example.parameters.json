@@ -10,7 +10,6 @@
     "verifyRbac": { "value": true },
     "enableMutations": { "value": false },
     "mutationConfirmationRequired": { "value": true },
-    "enableMcpHttp": { "value": false },
     "enableDeployments": { "value": false },
     "bicepRemoteModulesEnabled": { "value": false },
     "cpu": { "value": "0.5" },

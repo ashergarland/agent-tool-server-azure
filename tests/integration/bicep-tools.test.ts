@@ -67,10 +67,11 @@ describe('Bicep tools over HTTP', () => {
     });
     compiler = createFakeCompiler();
 
-    app = createApplication({
+    app = await createApplication({
       config: testConfig({
         AUTH_MODE: 'api-key',
         API_KEYS: API_KEY,
+        MUTATIONS_ENABLED: 'true',
         DEPLOYMENTS_ENABLED: 'true',
         BICEP_CLI_PATH: '/opt/bicep/bicep',
         AZURE_SUBSCRIPTION_IDS: SUB_A,
@@ -84,7 +85,7 @@ describe('Bicep tools over HTTP', () => {
   });
 
   afterEach(async () => {
-    await app.http.close();
+    await app.shutdown();
   });
 
   const call = async <T>(

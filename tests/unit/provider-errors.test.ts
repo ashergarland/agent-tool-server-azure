@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { AppError } from '../../src/errors.js';
+import { AppError } from '@agent-tool-platform/runtime/errors';
 import { mapAzureError } from '../../src/provider/azure/errors.js';
 import {
+  azureSdkOperationOptions,
   escapeKqlString,
   resourceGroupFromResourceId,
   subscriptionIdFromResourceId,
 } from '../../src/provider/azure/index.js';
-import { FixedWindowRateLimiter } from '../../src/server/rate-limit.js';
 import { webAppId } from '../helpers/fake-provider.js';
 
 describe('mapAzureError', () => {
@@ -21,6 +21,19 @@ describe('mapAzureError', () => {
     [504, 'timeout'],
   ])('maps HTTP %s to %s', (status, code) => {
     expect(mapAzureError({ statusCode: status, message: 'boom' }, 'ctx').code).toBe(code);
+  });
+
+  describe('Azure SDK transport options', () => {
+    it('applies the provider timeout with or without caller cancellation', () => {
+      const signal = new AbortController().signal;
+      expect(azureSdkOperationOptions(30_000)).toEqual({
+        requestOptions: { timeout: 30_000 },
+      });
+      expect(azureSdkOperationOptions(45_000, signal)).toEqual({
+        abortSignal: signal,
+        requestOptions: { timeout: 45_000 },
+      });
+    });
   });
 
   it('passes AppErrors through untouched', () => {
@@ -55,30 +68,5 @@ describe('escapeKqlString', () => {
   it('escapes quotes and backslashes', () => {
     expect(escapeKqlString("a'b")).toBe("a\\'b");
     expect(escapeKqlString('a\\b')).toBe('a\\\\b');
-  });
-});
-
-describe('FixedWindowRateLimiter', () => {
-  it('allows up to the configured maximum per window', () => {
-    let now = 0;
-    const limiter = new FixedWindowRateLimiter(2, 1000, () => now);
-    expect(limiter.consume('a').allowed).toBe(true);
-    expect(limiter.consume('a').allowed).toBe(true);
-    expect(limiter.consume('a').allowed).toBe(false);
-
-    now = 1001;
-    expect(limiter.consume('a').allowed).toBe(true);
-  });
-
-  it('tracks callers independently', () => {
-    const limiter = new FixedWindowRateLimiter(1, 1000, () => 0);
-    expect(limiter.consume('a').allowed).toBe(true);
-    expect(limiter.consume('b').allowed).toBe(true);
-  });
-
-  it('is disabled when max is zero', () => {
-    const limiter = new FixedWindowRateLimiter(0, 1000, () => 0);
-    expect(limiter.enabled).toBe(false);
-    expect(limiter.consume('a').allowed).toBe(true);
   });
 });

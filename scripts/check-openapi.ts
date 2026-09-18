@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import { createToolRegistry } from '../src/tools/registry.js';
+import { createToolRegistry } from '@agent-tool-platform/runtime/tools';
+import { toolDefinitions } from '../src/tools/definitions/index.js';
 import { GUID, isDeploymentSpecificUrl } from './lib/hygiene.js';
 
 /**
@@ -21,6 +22,7 @@ interface OpenApiDocument {
     >
   >;
   components?: { securitySchemes?: Record<string, unknown> };
+  security?: readonly Record<string, readonly string[]>[];
 }
 
 const problems: string[] = [];
@@ -29,11 +31,10 @@ const check = (condition: boolean, message: string): void => {
 };
 
 const main = async (): Promise<void> => {
-  const target = process.argv[2];
-  if (!target) throw new Error('usage: check-openapi.ts <path-to-openapi.json>');
+  const target = process.argv[2] ?? 'openapi.json';
 
   const document = JSON.parse(await readFile(target, 'utf8')) as OpenApiDocument;
-  const registry = createToolRegistry();
+  const registry = createToolRegistry(toolDefinitions);
 
   check(
     document.openapi === '3.1.0',
@@ -42,6 +43,10 @@ const main = async (): Promise<void> => {
   check(Boolean(document.info?.title), 'info.title is missing');
   check(Boolean(document.info?.version), 'info.version is missing');
   check(Boolean(document.components?.securitySchemes), 'no security scheme is declared');
+  check(
+    document.security?.some((requirement) => Object.keys(requirement).length > 0) === true,
+    'the published document does not require authentication',
+  );
 
   for (const path of ['/health', '/ready', '/version', '/tools']) {
     check(Boolean(document.paths?.[path]), `${path} is missing from the document`);

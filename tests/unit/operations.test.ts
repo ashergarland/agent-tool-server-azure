@@ -26,11 +26,13 @@ const setup = (overrides: Record<string, string> = {}) => {
     ),
   });
   const logger = createTestLogger();
+  const config = testConfig(overrides);
   const service = new OperationsService(
     provider,
-    new Guardrails(testConfig(overrides)),
+    new Guardrails(config),
     logger as unknown as Logger,
     new Metrics(),
+    config.azure.mutationTimeoutMs,
   );
   return { provider, service, logger };
 };
@@ -52,7 +54,7 @@ describe('OperationsService', () => {
     const { service } = setup();
     await expect(
       service.restartWebApp({ resourceId: webAppId(), confirm: true, dryRun: false }),
-    ).rejects.toThrow(/MUTATIONS_ENABLED is false/);
+    ).rejects.toThrow(/mutations are disabled/);
   });
 
   it('requires confirmation even when mutations are enabled', async () => {
@@ -88,13 +90,107 @@ describe('OperationsService', () => {
 
   it('restarts a virtual machine when the type matches', async () => {
     const { provider, service } = setup({ MUTATIONS_ENABLED: 'true' });
-    await service.restartVirtualMachine({ resourceId: vmId(), confirm: true, dryRun: false });
+    const signal = new AbortController().signal;
+    await service.restartVirtualMachine({
+      resourceId: vmId(),
+      confirm: true,
+      dryRun: false,
+      signal,
+    });
     const call = provider.calls.find((entry) => entry.name === 'restartVirtualMachine');
     expect(call?.args[0]).toEqual({
       subscriptionId: '11111111-1111-1111-1111-111111111111',
       resourceGroup: 'rg-prod',
       name: 'vm1',
     });
+    expect(call?.args[1]).toBeInstanceOf(AbortSignal);
+  });
+
+  it('does not mutate when cancellation arrives during resource verification', async () => {
+    const { provider, service } = setup({ MUTATIONS_ENABLED: 'true' });
+    const cancellation = new AbortController();
+    provider.getResourceById = vi.fn((resourceId: string) => {
+      cancellation.abort();
+      return Promise.resolve(
+        makeResource({ id: resourceId, type: 'microsoft.compute/virtualmachines' }),
+      );
+    });
+
+    await expect(
+      service.restartVirtualMachine({
+        resourceId: vmId(),
+        confirm: true,
+        dryRun: false,
+        signal: cancellation.signal,
+      }),
+    ).rejects.toMatchObject({ code: 'timeout' });
+    expect(provider.calls.filter((entry) => entry.name === 'restartVirtualMachine')).toHaveLength(
+      0,
+    );
+  });
+
+  it('finishes tracking an admitted mutation after caller cancellation', async () => {
+    const { provider, service, logger } = setup({ MUTATIONS_ENABLED: 'true' });
+    const cancellation = new AbortController();
+    provider.restartVirtualMachine = vi.fn(() => {
+      cancellation.abort();
+      return Promise.resolve();
+    });
+
+    await expect(
+      service.restartVirtualMachine({
+        resourceId: vmId(),
+        confirm: true,
+        dryRun: false,
+        signal: cancellation.signal,
+        reason: 'complete accepted restart',
+      }),
+    ).resolves.toMatchObject({ performed: true });
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'azure.mutation',
+        reason: 'complete accepted restart',
+      }),
+      expect.any(String),
+    );
+  });
+
+  it('bounds admitted LRO polling with an internal signal and audits an indeterminate outcome', async () => {
+    vi.useFakeTimers();
+    try {
+      const { provider, service, logger } = setup({
+        MUTATIONS_ENABLED: 'true',
+        AZURE_MUTATION_TIMEOUT_MS: '10000',
+      });
+      let providerSignal: AbortSignal | undefined;
+      provider.restartVirtualMachine = vi.fn((_ref, signal) => {
+        providerSignal = signal;
+        return new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      });
+
+      const pending = service.restartVirtualMachine({
+        resourceId: vmId(),
+        confirm: true,
+        dryRun: false,
+        reason: 'bounded restart',
+      });
+      const rejected = expect(pending).rejects.toMatchObject({ code: 'timeout' });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await rejected;
+
+      expect(providerSignal?.aborted).toBe(true);
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'azure.mutation',
+          outcome: 'indeterminate',
+        }),
+        expect.any(String),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects tagging with an empty tag set', async () => {

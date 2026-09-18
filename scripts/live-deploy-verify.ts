@@ -10,7 +10,7 @@
  *   npx tsx scripts/live-deploy-verify.ts <subscription-id> <resource-group> <table-endpoint>
  */
 import { createApplication } from '../src/app.js';
-import { buildConfig, envSchema } from '../src/config/index.js';
+import { loadConfig } from '../src/config/index.js';
 import { AzureTableDeploymentRecordStore } from '../src/deployments/store-azure.js';
 import { createAzureCredentials } from '../src/provider/azure/credential.js';
 import type { DeploymentRecord } from '../src/deployments/records.js';
@@ -35,20 +35,19 @@ const check = async (step: string, run: () => Promise<string>): Promise<void> =>
   }
 };
 
-const config = buildConfig(
-  envSchema.parse({
-    NODE_ENV: 'development',
-    AUTH_MODE: 'disabled',
-    LOG_LEVEL: 'silent',
-    AZURE_SUBSCRIPTION_IDS: subscriptionId,
-    AZURE_ALLOWED_RESOURCE_GROUPS: resourceGroup,
-    DEPLOYMENTS_ENABLED: 'true',
-    BICEP_CLI_PATH: process.env['BICEP_CLI_PATH'] ?? '',
-    DEPLOYMENT_RECORD_STORE: 'azure-table',
-    DEPLOYMENT_RECORD_TABLE_ENDPOINT: tableEndpoint,
-    DEPLOYMENT_POLL_INTERVAL_MS: '2000',
-  }),
-);
+const config = loadConfig({
+  NODE_ENV: 'development',
+  AUTH_MODE: 'disabled',
+  LOG_LEVEL: 'silent',
+  AZURE_SUBSCRIPTION_IDS: subscriptionId,
+  AZURE_ALLOWED_RESOURCE_GROUPS: resourceGroup,
+  MUTATIONS_ENABLED: 'true',
+  DEPLOYMENTS_ENABLED: 'true',
+  BICEP_CLI_PATH: process.env['BICEP_CLI_PATH'] ?? '',
+  DEPLOYMENT_RECORD_STORE: 'azure-table',
+  DEPLOYMENT_RECORD_TABLE_ENDPOINT: tableEndpoint,
+  DEPLOYMENT_POLL_INTERVAL_MS: '2000',
+});
 
 // The real Azure Table store, against a real storage account with shared keys disabled.
 const store = new AzureTableDeploymentRecordStore(createAzureCredentials(config).deployment, {
@@ -56,12 +55,18 @@ const store = new AzureTableDeploymentRecordStore(createAzureCredentials(config)
   recordsTable: config.deployments.store.recordsTable,
   locksTable: config.deployments.store.locksTable,
   lockTtlMs: config.deployments.store.lockTtlMs,
+  requestTimeoutMs: config.azure.armRequestTimeoutMs,
 });
 
-const app = createApplication({ config, store });
+const app = await createApplication({ config, store });
 const { services, registry } = app;
 const principal = 'live:deploy-verify';
-const context = { requestId: 'live-deploy', principal, transport: 'http' } as const;
+const context = {
+  requestId: 'live-deploy',
+  principal: { id: principal, kind: 'anonymous' as const },
+  transport: 'http',
+  signal: new AbortController().signal,
+} as const;
 const invoke = <T>(tool: string, input: unknown): Promise<T> =>
   registry.invoke(tool, input, services, context) as Promise<T>;
 
@@ -202,6 +207,32 @@ await check('what-if predicts the storage account as a Create', async () => {
   confirmationHash = result.confirmationHash;
   if (result.summary.deletes.length > 0) throw new Error('unexpected predicted deletions');
   return JSON.stringify(result.summary.countsByChangeType);
+});
+
+await check('a source change after preview is refused without deployment', async () => {
+  try {
+    await invoke('azure_deploy_bicep', {
+      bundle: {
+        mainFile: 'main.bicep',
+        files: [
+          {
+            path: 'main.bicep',
+            content: `${bundleFor('Standard_LRS').files[0]?.content ?? ''}\n// tampered`,
+          },
+        ],
+      },
+      parameters: {},
+      scope,
+      confirmationHash,
+      confirm: true,
+      reason: 'live verification of the preview binding',
+    });
+    throw new Error('a tampered deployment was accepted');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/differ from the previewed deployment/.test(message)) throw error;
+    return 'refused before deployment, as intended';
+  }
 });
 
 await check('azure_deploy_bicep starts a REAL ARM deployment', async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { NodeProcessRunner } from '../../src/bicep/process.js';
+import { PlatformProcessRunner } from '../../src/bicep/process.js';
 
-const runner = new NodeProcessRunner();
+const runner = new PlatformProcessRunner();
 
 const runNode = (script: string, overrides: Partial<Parameters<typeof runner.run>[0]> = {}) =>
   runner.run({
@@ -17,7 +17,7 @@ const runNode = (script: string, overrides: Partial<Parameters<typeof runner.run
     ...overrides,
   });
 
-describe('NodeProcessRunner', () => {
+describe('PlatformProcessRunner', () => {
   it('runs a command with an argv array and captures both streams', async () => {
     const result = await runNode('process.stdout.write("out");process.stderr.write("err")');
     expect(result.exitCode).toBe(0);

@@ -1,56 +1,181 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from 'pino';
-import { createApplication } from '../../src/app.js';
-import { buildReadinessReport } from '../../src/server/ready.js';
+import { createApplication, type Application } from '../../src/app.js';
 import { InMemoryDeploymentRecordStore } from '../../src/deployments/store-memory.js';
+import type { AzureProvider } from '../../src/provider/types.js';
 import { testConfig } from '../helpers/config.js';
 import { createFakeCompiler } from '../helpers/bicep.js';
 import { createFakeProvider, createTestLogger, SUB_A } from '../helpers/fake-provider.js';
 
-const build = (overrides: Record<string, string> = {}) => {
+const applications: Application[] = [];
+
+const build = async (
+  overrides: Record<string, string> = {},
+  providerOverrides: Partial<AzureProvider> = {},
+) => {
   const compiler = createFakeCompiler();
   const store = new InMemoryDeploymentRecordStore();
-  const app = createApplication({
+  const provider = createFakeProvider(providerOverrides);
+  const app = await createApplication({
     config: testConfig(overrides),
     logger: createTestLogger() as unknown as Logger,
-    provider: createFakeProvider(),
+    provider,
     compiler,
     store,
+    readinessCacheMs: 0,
   });
-  return { app, compiler, store };
+  applications.push(app);
+  return { app, compiler, store, provider };
 };
 
 const DEPLOYMENT_ENV = {
+  MUTATIONS_ENABLED: 'true',
   DEPLOYMENTS_ENABLED: 'true',
   BICEP_CLI_PATH: '/opt/bicep/bicep',
   AZURE_SUBSCRIPTION_IDS: SUB_A,
 };
 
-describe('readiness', () => {
-  it('is ready and reports deployment components as disabled by default', async () => {
-    const { app } = build();
-    const report = await buildReadinessReport(app.config, app.registry, app.services);
+const check = (report: Awaited<ReturnType<Application['readiness']>>, name: string) =>
+  report.checks.find((entry) => entry.name === name);
+
+afterEach(async () => {
+  await Promise.all(applications.splice(0).map((application) => application.shutdown()));
+});
+
+describe('provider readiness', () => {
+  it('proves Azure query and read RBAC separately from process health', async () => {
+    const { app, provider } = await build();
+    const report = await app.readiness();
 
     expect(report.ready).toBe(true);
-    expect(report.components['registry']?.state).toBe('ok');
-    expect(report.components['bicepCompiler']?.state).toBe('disabled');
-    expect(report.components['deploymentStore']?.state).toBe('disabled');
-    expect(report.capabilities.deploymentsEnabled).toBe(false);
-    expect(report.capabilities.transports).toEqual(['http', 'mcp-stdio', 'mcp-http']);
-    expect(report.capabilities.toolCount).toBeGreaterThanOrEqual(18);
+    expect(check(report, 'registry')).toMatchObject({ state: 'ready' });
+    expect(check(report, 'azure-provider')).toMatchObject({ state: 'ready' });
+    expect(check(report, 'azure-mutations')).toMatchObject({
+      state: 'ready',
+      detail: 'mutations are disabled',
+    });
+    expect(check(report, 'azure-deployments')).toMatchObject({
+      state: 'ready',
+      detail: 'generic Bicep deployment is disabled',
+    });
+    expect(provider.calls.some((entry) => entry.name === 'listSubscriptions')).toBe(true);
+    expect(provider.calls.some((entry) => entry.name === 'getEffectivePermissions')).toBe(true);
   });
 
-  it('checks the compiler and the record store when deployments are enabled', async () => {
-    const { app } = build(DEPLOYMENT_ENV);
-    const report = await buildReadinessReport(app.config, app.registry, app.services);
+  it('checks mutation RBAC, deployment RBAC, compiler, and durable store when enabled', async () => {
+    const { app } = await build(DEPLOYMENT_ENV);
+    const report = await app.readiness();
 
     expect(report.ready).toBe(true);
-    expect(report.components['bicepCompiler']).toMatchObject({ state: 'ok' });
-    expect(report.components['deploymentStore']).toMatchObject({ state: 'ok' });
+    for (const name of [
+      'azure-mutations',
+      'azure-deployments',
+      'bicep-compiler',
+      'deployment-store',
+    ]) {
+      expect(check(report, name), name).toMatchObject({ state: 'ready' });
+    }
+  });
+
+  it('requires the complete Bicep workflow RBAC before deployment readiness is ready', async () => {
+    const { app } = await build(DEPLOYMENT_ENV, {
+      getEffectivePermissions: vi.fn((_scope: string, identity: 'operator' | 'deployment') =>
+        Promise.resolve(
+          identity === 'deployment'
+            ? [{ actions: ['Microsoft.Resources/deployments/write'], notActions: [] }]
+            : [{ actions: ['*'], notActions: [] }],
+        ),
+      ),
+    });
+
+    const report = await app.readiness();
+
+    expect(report.ready).toBe(false);
+    expect(check(report, 'azure-deployments')).toMatchObject({ state: 'not_ready' });
+  });
+
+  it('is not ready when provider authentication or the read query fails', async () => {
+    const { app } = await build(
+      {},
+      {
+        listSubscriptions: vi.fn(() =>
+          Promise.reject(new Error('credential payload must not escape')),
+        ),
+      },
+    );
+    const report = await app.readiness();
+
+    expect(report.ready).toBe(false);
+    expect(check(report, 'azure-provider')).toMatchObject({
+      state: 'not_ready',
+      detail: 'Azure authentication or the read-only provider query failed',
+    });
+    expect(JSON.stringify(report)).not.toContain('credential payload');
+  });
+
+  it('reports degraded provider assurance when RBAC verification is intentionally disabled', async () => {
+    const { app } = await build({ AZURE_VERIFY_RBAC: 'false' });
+    const report = await app.readiness();
+
+    expect(report.ready).toBe(true);
+    expect(check(report, 'azure-provider')?.state).toBe('degraded');
+  });
+
+  it('accepts read RBAC granted only at an allowed resource-group scope', async () => {
+    const permissions = vi.fn((scope: string) =>
+      Promise.resolve(
+        scope.endsWith('/resourceGroups/rg-prod')
+          ? [
+              {
+                actions: ['Microsoft.Resources/subscriptions/resourceGroups/read'],
+                notActions: [],
+              },
+            ]
+          : [],
+      ),
+    );
+    const { app } = await build(
+      {
+        AZURE_SUBSCRIPTION_IDS: SUB_A,
+        AZURE_ALLOWED_RESOURCE_GROUPS: 'rg-prod',
+      },
+      { getEffectivePermissions: permissions },
+    );
+
+    const report = await app.readiness();
+
+    expect(report.ready).toBe(true);
+    expect(check(report, 'azure-provider')).toMatchObject({ state: 'ready' });
+    expect(permissions).toHaveBeenCalledWith(
+      `/subscriptions/${SUB_A}/resourceGroups/rg-prod`,
+      'operator',
+      undefined,
+    );
+  });
+
+  it('accepts mutation RBAC granted only at allowed resource-group scopes', async () => {
+    const permissions = vi.fn((scope: string) =>
+      Promise.resolve(
+        scope.endsWith('/resourceGroups/rg-prod') ? [{ actions: ['*'], notActions: [] }] : [],
+      ),
+    );
+    const { app } = await build(
+      {
+        MUTATIONS_ENABLED: 'true',
+        AZURE_ALLOWED_RESOURCE_GROUPS: 'rg-prod',
+      },
+      { getEffectivePermissions: permissions },
+    );
+
+    const report = await app.readiness();
+
+    expect(report.ready).toBe(true);
+    expect(check(report, 'azure-provider')).toMatchObject({ state: 'ready' });
+    expect(check(report, 'azure-mutations')).toMatchObject({ state: 'ready' });
   });
 
   it('is not ready when the pinned compiler is unusable', async () => {
-    const { app, compiler } = build(DEPLOYMENT_ENV);
+    const { app, compiler } = await build(DEPLOYMENT_ENV);
     compiler.info = {
       available: false,
       version: undefined,
@@ -58,13 +183,13 @@ describe('readiness', () => {
       detail: 'the Bicep CLI digest does not match BICEP_CLI_SHA256',
     };
 
-    const report = await buildReadinessReport(app.config, app.registry, app.services);
+    const report = await app.readiness();
     expect(report.ready).toBe(false);
-    expect(report.components['bicepCompiler']?.state).toBe('unavailable');
+    expect(check(report, 'bicep-compiler')?.state).toBe('not_ready');
   });
 
-  it('is degraded but still ready when the compiler digest is unpinned', async () => {
-    const { app, compiler } = build(DEPLOYMENT_ENV);
+  it('is degraded but still ready when the compiler digest is unpinned outside production', async () => {
+    const { app, compiler } = await build(DEPLOYMENT_ENV);
     compiler.info = {
       available: true,
       version: '0.30.0',
@@ -72,69 +197,60 @@ describe('readiness', () => {
       detail: undefined,
     };
 
-    const report = await buildReadinessReport(app.config, app.registry, app.services);
-    expect(report.components['bicepCompiler']?.state).toBe('degraded');
-    expect(report.components['bicepCompiler']?.detail).toMatch(/BICEP_CLI_SHA256 not configured/);
+    const report = await app.readiness();
+    expect(check(report, 'bicep-compiler')?.state).toBe('degraded');
     expect(report.ready).toBe(true);
   });
 
-  it('is not ready when the record store cannot be reached', async () => {
-    const { app, store } = build(DEPLOYMENT_ENV);
-    vi.spyOn(store, 'ping').mockRejectedValue(new Error('table storage unreachable'));
+  it('is not ready when the deployment record store cannot be reached', async () => {
+    const { app, store } = await build(DEPLOYMENT_ENV);
+    vi.spyOn(store, 'ping').mockRejectedValue(new Error('table storage credential leaked'));
 
-    const report = await buildReadinessReport(app.config, app.registry, app.services);
+    const report = await app.readiness();
     expect(report.ready).toBe(false);
-    expect(report.components['deploymentStore']).toMatchObject({
-      state: 'unavailable',
-      detail: 'table storage unreachable',
+    expect(check(report, 'deployment-store')).toMatchObject({
+      state: 'not_ready',
+      detail: 'the deployment record store is unavailable',
     });
+    expect(JSON.stringify(report)).not.toContain('credential leaked');
   });
 
-  it('flags a shared identity for deployments as degraded', async () => {
-    const { app } = build(DEPLOYMENT_ENV);
-    const report = await buildReadinessReport(app.config, app.registry, app.services);
-    expect(report.components['identity']?.detail).toMatch(/AZURE_DEPLOYMENT_CLIENT_ID is unset/);
+  it('fails readiness when mutations are enabled without effective operator RBAC', async () => {
+    const { app } = await build(
+      { MUTATIONS_ENABLED: 'true', AZURE_SUBSCRIPTION_IDS: SUB_A },
+      { getEffectivePermissions: vi.fn(() => Promise.resolve([])) },
+    );
+    const report = await app.readiness();
+
+    expect(report.ready).toBe(false);
+    expect(check(report, 'azure-mutations')?.state).toBe('not_ready');
   });
 
-  it('reports a separate deployment identity when one is configured', async () => {
-    const { app } = build({
-      ...DEPLOYMENT_ENV,
-      AZURE_CLIENT_ID: 'operator-client-id',
-      AZURE_DEPLOYMENT_CLIENT_ID: 'deployer-client-id',
-    });
-    const report = await buildReadinessReport(app.config, app.registry, app.services);
-    expect(report.components['identity']).toMatchObject({
-      state: 'ok',
-      detail: 'separate operator and deployment identities',
-    });
-  });
-
-  it('serves /ready with the right status code and never mutates anything', async () => {
-    const { app } = build();
+  it('serves bounded readiness without invoking a mutating provider operation', async () => {
+    const { app, provider } = await build();
     const response = await app.http.inject({ method: 'GET', url: '/ready' });
+
     expect(response.statusCode).toBe(200);
     expect(response.json<{ ready: boolean }>().ready).toBe(true);
-
-    const failing = build(DEPLOYMENT_ENV);
-    failing.compiler.info = {
-      available: false,
-      version: undefined,
-      checksumVerified: false,
-      detail: 'missing',
-    };
-    const unhealthy = await failing.app.http.inject({ method: 'GET', url: '/ready' });
-    expect(unhealthy.statusCode).toBe(503);
+    expect(response.body).not.toContain(SUB_A);
+    const consequential = new Set([
+      'restartVirtualMachine',
+      'startVirtualMachine',
+      'restartWebApp',
+      'setResourceTags',
+      'beginDeployment',
+    ]);
+    expect(provider.calls.some((entry) => consequential.has(entry.name))).toBe(false);
   });
 
-  it('keeps /health independent of readiness', async () => {
-    const failing = build(DEPLOYMENT_ENV);
-    failing.compiler.info = {
-      available: false,
-      version: undefined,
-      checksumVerified: false,
-      detail: 'missing',
-    };
-    const health = await failing.app.http.inject({ method: 'GET', url: '/health' });
+  it('keeps /health independent of provider readiness', async () => {
+    const { app } = await build(
+      {},
+      { listSubscriptions: vi.fn(() => Promise.reject(new Error('provider unavailable'))) },
+    );
+
+    expect((await app.http.inject({ method: 'GET', url: '/ready' })).statusCode).toBe(503);
+    const health = await app.http.inject({ method: 'GET', url: '/health' });
     expect(health.statusCode).toBe(200);
     expect(health.json<{ status: string }>().status).toBe('ok');
   });

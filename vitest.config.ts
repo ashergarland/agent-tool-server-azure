@@ -14,7 +14,7 @@ export default defineConfig({
       // tests/integration/arm-contract.test.ts.
       exclude: [
         'src/index.ts',
-        'src/mcp/stdio.ts',
+        'src/stdio.ts',
         'src/provider/azure/index.ts',
         'src/provider/azure/credential.ts',
         'src/deployments/store-azure.ts',

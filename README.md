@@ -9,7 +9,9 @@ identities and never with secrets in configuration.
 
 There is no frontend. The same validated tool registry is served over three transports:
 authenticated HTTP with an OpenAPI 3.1 document, stdio MCP, and authenticated stateless Streamable
-HTTP MCP.
+HTTP MCP. Generic configuration, authentication, lifecycle, transports, registry, error handling,
+mutation gating, readiness aggregation, routing rendering, and bounded process primitives come
+from Agent Tool Platform; this repository owns only the Azure capability and its domain policy.
 
 > [!IMPORTANT]
 > Mutations and generic deployment are **disabled by default**, and the Azure roles that would make
@@ -25,6 +27,7 @@ HTTP MCP.
 - [HTTP API](#http-api)
 - [Remote MCP and coding clients](#remote-mcp-and-coding-clients)
 - [Bicep deployment tools](#bicep-deployment-tools)
+- [D4 capability profiles](#d4-capability-profiles)
 - [Configuration](#configuration)
 - [Deploying to Azure](#deploying-to-azure)
 - [Contributing and security](#contributing-and-security)
@@ -34,8 +37,7 @@ agent (ChatGPT, a coding client, anything that speaks MCP or HTTP)
    │  authenticated tool request
    ▼
 agent-tool-server-azure
-   │  transports         HTTP/OpenAPI · stdio MCP · Streamable HTTP MCP
-   │  tool registry      one Zod-validated definition per tool, input and output
+   │  Agent Tool Platform  lifecycle · auth · transports · registry · mutation gate
    │  services           inventory · diagnostics · operations · deployments · guardrails
    │  boundaries         Bicep bundle validation, pinned compiler, ARM inspection
    ▼
@@ -49,16 +51,16 @@ Azure SDK · ARM · Resource Graph       ARM deployments
 
 ## How it works
 
-| Layer       | Location                | Responsibility                                                                                 |
-| ----------- | ----------------------- | ---------------------------------------------------------------------------------------------- |
-| Transport   | `src/server`, `src/mcp` | Routing, authentication, rate limiting, error mapping. No Azure knowledge.                     |
-| Tools       | `src/tools`             | Declarative definitions with Zod schemas, routing guidance and MCP annotations; the registry.  |
-| Services    | `src/services`          | Inventory, diagnostics, constrained operations, deployments, and the guardrails they consult.  |
-| Bicep       | `src/bicep`             | Bundle validation, materialisation, the pinned compiler adapter, ARM template inspection.      |
-| Deployments | `src/deployments`       | Deployment records: the port plus in-memory and Azure Table implementations.                   |
-| Provider    | `src/provider`          | The `AzureProvider` port and its Azure SDK adapter. The only layer that knows Azure SDK types. |
-| Config      | `src/config`            | Zod-validated environment; the process fails fast on misconfiguration.                         |
-| OpenAPI     | `src/openapi`           | Generates the OpenAPI 3.1 document from the registry, so HTTP can never drift from the tools.  |
+| Layer       | Location            | Responsibility                                                                                    |
+| ----------- | ------------------- | ------------------------------------------------------------------------------------------------- |
+| Platform    | dependency          | Configuration base, auth, lifecycle, HTTP/MCP, registry, routing, errors, mutation gate, OpenAPI. |
+| Capability  | `src/capability.ts` | Thin composition root, Azure services, readiness contributors, and protected metrics route.       |
+| Tools       | `src/tools`         | Azure definitions with Zod schemas, routing guidance, and MCP annotations.                        |
+| Services    | `src/services`      | Inventory, diagnostics, constrained operations, deployments, and Azure scope policy.              |
+| Bicep       | `src/bicep`         | Bundle validation, materialisation, pinned compiler adapter, and ARM template inspection.         |
+| Deployments | `src/deployments`   | Deployment records: the port plus in-memory and Azure Table implementations.                      |
+| Provider    | `src/provider`      | The `AzureProvider` port and Azure SDK adapter; the only layer that knows Azure SDK types.        |
+| Config      | `src/config`        | Azure configuration composed with the Platform configuration contract.                            |
 
 Three rules keep the design honest:
 
@@ -67,8 +69,8 @@ Three rules keep the design honest:
    transport publishes byte-identical contracts.
 2. **Provider logic never lives in a transport.** Adding remote MCP required no change to any
    service.
-3. **Everything below the transport throws `AppError`.** Each transport maps that taxonomy to its
-   own representation in exactly one place.
+3. **Azure errors use Platform `AppError`.** Platform projects one bounded error taxonomy over
+   every transport; Azure adapters only translate provider-specific failures into it.
 
 ---
 
@@ -204,7 +206,7 @@ curl -H "x-api-key: <your-api-key>" http://localhost:8080/tools
 | `GET`                 | `/metrics`          | yes  | Counters and latency summaries.                        |
 | `POST`/`GET`/`DELETE` | `/mcp`              | yes  | Stateless Streamable HTTP MCP.                         |
 
-Tool input may be sent bare or wrapped in an `input` envelope:
+Tool input is the direct JSON body:
 
 ```bash
 curl -sS "https://<host>/tools/azure_search_resources" \
@@ -230,7 +232,8 @@ Successful responses are `{ "tool", "requestId", "result" }`. Failures use one e
 ```
 
 Codes map to HTTP status: `bad_request` 400, `unauthorized` 401, `forbidden` 403, `not_found` 404,
-`conflict` 409, `rate_limited` 429, `internal_error` 500, `upstream_error` 502, `timeout` 504.
+`conflict` 409, `limit_exceeded` 413, `rate_limited` 429, `internal_error` 500,
+`upstream_error` 502, `not_ready`/`busy` 503, and `timeout` 504.
 
 ### ChatGPT
 
@@ -269,7 +272,7 @@ same as for `/tools`.
   "mcpServers": {
     "azure": {
       "command": "node",
-      "args": ["/path/to/agent-tool-server-azure/dist/mcp/stdio.js"],
+      "args": ["/path/to/agent-tool-server-azure/dist/stdio.js"],
       "env": {
         "AUTH_MODE": "disabled",
         "AZURE_SUBSCRIPTION_IDS": "<subscription-id>",
@@ -309,9 +312,10 @@ friends) must resolve to a file in the same bundle. In the compiled template:
 script and content URLs, Complete mode, unsupported or non-allow-listed scopes, and any structure
 that cannot be bounded or inspected.
 
-**Modules.** Local modules inside the bundle work normally. Remote module restore is disabled by
-default; when enabled it is limited to configured OCI registries or Template Specs. See the
-[threat model](docs/threat-model.md).
+**Modules.** Local modules inside the bundle work normally. Remote OCI module restore is disabled
+by default and, when enabled, is limited to configured registries. Template Specs remain
+unsupported because the compiled template retains an external link whose content cannot be
+inspected locally. See the [threat model](docs/threat-model.md).
 
 **Compilation.** A pinned, checksum-verified official Bicep CLI is installed into the image at build
 time and invoked directly — no shell, no inherited environment, non-root, in an unpredictable
@@ -324,6 +328,28 @@ undo anything done outside this server. Secure parameter values are never stored
 requires them to be supplied again.
 
 ---
+
+## D4 capability profiles
+
+[`capability-profiles.json`](capability-profiles.json) declares two account-neutral hosted
+container profiles over the same Azure provider workload:
+
+- `hosted-read-only` exposes the read and diagnosis surface while mutation execution remains off.
+- `hosted-mutating` additionally permits separately enabled constrained operations and Bicep
+  execution. Platform's `MUTATIONS_ENABLED` gate applies to every execution; Bicep retains its
+  separate `DEPLOYMENTS_ENABLED`, what-if, confirmation-hash, reason, scope, RBAC, compiler, and
+  record-store controls.
+
+Each profile has a bounded public schema layered over the shared
+[`schemas/hosted-configuration.schema.json`](schemas/hosted-configuration.schema.json) contract.
+The read-only schema fixes `MUTATIONS_ENABLED=false`; the mutating schema fixes both
+`MUTATIONS_ENABLED=true` and `MUTATION_CONFIRMATION_REQUIRED=true`. Numeric limits and startup
+dependencies match the supported runtime range, including the separate requirements for enabling
+Bicep deployment. Both hosted profiles keep `TRUST_PROXY=false` until an exact trusted proxy chain
+can be represented without relying on spoofable forwarded headers. The declared provenance is the
+checked-in `Dockerfile` build recipe; the
+operator-selected source revision, built image digest, subscriptions, tenants, resource identities,
+endpoints, secret values, and live desired state remain in private operator state.
 
 ## Configuration
 
@@ -341,15 +367,17 @@ for the annotated list. The most important entries:
 | `AZURE_ALLOWED_MANAGEMENT_GROUP_IDS`                        | _(empty = disabled)_     | Required for management group scope deployments.                  |
 | `AZURE_TENANT_DEPLOYMENTS_ENABLED`                          | `false`                  | Tenant scope deployments.                                         |
 | `AZURE_VERIFY_RBAC`                                         | `true`                   | Ask ARM what each identity can do before reporting a scope.       |
+| `AZURE_ARM_REQUEST_TIMEOUT_MS`                              | `30000`                  | Per-request ARM transport bound; independent of tool deadlines.   |
+| `AZURE_MUTATION_TIMEOUT_MS`                                 | `600000`                 | Overall bound for admitted guarded operations and LRO polling.    |
 | `MUTATIONS_ENABLED` / `MUTATION_CONFIRMATION_REQUIRED`      | `false` / `true`         | The four guarded operations.                                      |
-| `MCP_HTTP_ENABLED`                                          | `true`                   | The `/mcp` endpoint.                                              |
 | `DEPLOYMENTS_ENABLED`                                       | `false`                  | Generic Bicep deployment.                                         |
 | `BICEP_CLI_PATH` / `BICEP_CLI_SHA256`                       | – / –                    | The pinned compiler. The digest is required in production.        |
 | `BICEP_REMOTE_MODULES_ENABLED` / `BICEP_ALLOWED_REGISTRIES` | `false` / –              | Remote module restore.                                            |
 | `DEPLOYMENT_RECORD_STORE`                                   | `memory`                 | `azure-table` is required in production.                          |
 | `DEPLOYMENT_PREVIEW_TTL_MS`                                 | `900000`                 | How long a confirmation hash stays valid.                         |
+| `REQUEST_TIMEOUT_MS`                                        | `0`                      | Generic deadline; deployments require `0` and use domain bounds.  |
 | `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS`                   | `120` / `60000`          | Per-principal fixed window; `0` disables.                         |
-| `HTTP_MAX_BODY_BYTES`                                       | `4194304`                | Bicep bundles need headroom.                                      |
+| `BODY_LIMIT_BYTES`                                          | `4194304`                | Bicep bundles need headroom.                                      |
 
 Production configuration is checked at startup: enabling deployments in production without a pinned
 compiler digest, a separate deployment identity, durable record storage or an explicit subscription
@@ -360,21 +388,28 @@ allow-list makes the process refuse to start.
 ## Local development
 
 ```bash
-npm run typecheck     # tsc --noEmit
-npm run lint          # eslint (type-aware)
-npm run format        # prettier
-npm test              # vitest
-npm run test:coverage # vitest + v8 coverage with thresholds
-npm run build         # tsc -> dist/
-npm start             # run the built server
-npm run openapi:emit  # write the OpenAPI document
-npm run openapi:check # check it against the registry
-npm run metadata:check# validate server.json
-npm run mcp:stdio     # run the same tools over MCP stdio
+npm run typecheck         # tsc --noEmit
+npm run lint              # eslint (type-aware)
+npm run format            # prettier
+npm test                  # vitest, including Platform conformance
+npm run test:coverage     # vitest + v8 coverage with thresholds
+npm run build             # tsc -> dist/
+npm start                 # run the built server
+npm run openapi:emit      # write openapi.json
+npm run openapi:check     # check openapi.json against the registry
+npm run metadata:validate # validate server.json
+npm run mcp:stdio         # run the same tools over MCP stdio
 ```
 
 Tests use fake Azure providers, compiler and process adapters, record stores and clocks. The suite
-touches no Azure account and no network.
+touches no Azure account and requires no cloud credentials. The checked-in Level 3 fixture drives
+the real `azure_get_resource` tool through an injected read-only provider and proves revision,
+replica, ingress, listener, readiness, image-pull, and degraded-state facts without a live request.
+
+Deployment-contract validation uses the exact Platform revision named in
+[`scripts/platform-reference.mjs`](scripts/platform-reference.mjs). Build that checkout and set
+`AGENT_TOOL_PLATFORM_CHECKOUT` before running `npm run deployment:validate` and
+`npm run deployment:conformance`.
 
 The hand-written ARM client is additionally covered by contract tests that point the _real_
 `ArmRestClient` and `ArmDeploymentClient` at a local stub HTTP server, pinning the request shapes
@@ -445,19 +480,17 @@ its known limits, read the **[threat model](docs/threat-model.md)**.
 
 ```
 src/
-  app.ts                 composition root
-  index.ts               HTTP entry point
-  errors.ts              transport-agnostic error taxonomy
-  config/                Zod-validated environment
-  server/                Fastify transport, auth, rate limiting, readiness, error mapping
-  tools/                 tool definitions, schemas, routing metadata, instructions, registry
+  capability.ts          D4 thin capability composition
+  app.ts                 test and embedding seam over Platform
+  index.ts / stdio.ts    Platform-hosted HTTP and stdio entry points
+  readiness.ts           Azure provider, RBAC, compiler, and record-store contributors
+  config/                Azure environment composed with Platform configuration
+  tools/                 Azure definitions, schemas, routing metadata, and instructions
   services/              inventory, diagnostics, operations, deployments, guardrails
   bicep/                 bundle validation, materialisation, compiler, inspection, hashing
   deployments/           deployment record port and implementations
   provider/              AzureProvider port + Azure SDK adapter
-  openapi/               OpenAPI 3.1 generation
-  mcp/                   MCP registry adapter, stdio entry point, Streamable HTTP handler
-  util/                  logging, metrics, concurrency
+  util/                  capability-owned operation and deployment metrics
 infra/                   Bicep templates, modules and a non-live parameter example
 scripts/                 provisioning, release, OpenAPI emit and check
 tests/                   unit and integration tests

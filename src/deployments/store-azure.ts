@@ -1,10 +1,14 @@
-import { createHash } from 'node:crypto';
-import { TableClient, type TableEntity } from '@azure/data-tables';
+import { createHash, randomUUID } from 'node:crypto';
+import { TableClient } from '@azure/data-tables';
 import type { TokenCredential } from '@azure/core-auth';
-import { AppError, conflict, internalError } from '../errors.js';
+import { AppError, conflict, internalError, timedOut } from '@agent-tool-platform/runtime/errors';
+import { azureSdkOperationOptions } from '../provider/azure/options.js';
+import { applyDeploymentRecordPatch } from './records.js';
 import type {
   DeploymentRecord,
   DeploymentRecordPatch,
+  DeploymentRecordPatchOptions,
+  DeploymentRecordPatchResult,
   DeploymentRecordStore,
   DeploymentStoreInfo,
 } from './records.js';
@@ -18,6 +22,7 @@ export interface AzureTableStoreOptions {
   readonly recordsTable: string;
   readonly locksTable: string;
   readonly lockTtlMs: number;
+  readonly requestTimeoutMs: number;
 }
 
 interface RecordEntity {
@@ -35,7 +40,9 @@ interface RecordEntity {
 interface LockEntity {
   partitionKey: string;
   rowKey: string;
+  ownerId: string;
   expiresAt: string;
+  [property: string]: unknown;
 }
 
 const principalKey = (principal: string): string =>
@@ -48,6 +55,40 @@ const statusOf = (error: unknown): number | undefined =>
   typeof error === 'object' && error !== null && 'statusCode' in error
     ? (error as { statusCode?: number }).statusCode
     : undefined;
+
+const assertNotCancelled = (signal: AbortSignal | undefined): void => {
+  if (signal?.aborted) throw timedOut('The request was cancelled');
+};
+
+const awaitWithCancellation = <T>(
+  pending: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> => {
+  if (signal === undefined) return pending;
+  assertNotCancelled(signal);
+
+  return new Promise<T>((resolve, reject) => {
+    const cancelled = (): void => {
+      signal.removeEventListener('abort', cancelled);
+      reject(new AppError('timeout', 'The request was cancelled'));
+    };
+    signal.addEventListener('abort', cancelled, { once: true });
+    void pending.then(
+      (value) => {
+        signal.removeEventListener('abort', cancelled);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', cancelled);
+        reject(
+          error instanceof Error
+            ? error
+            : internalError('The deployment record store operation failed', error),
+        );
+      },
+    );
+  });
+};
 
 /**
  * Azure Table Storage implementation.
@@ -69,16 +110,26 @@ export class AzureTableDeploymentRecordStore implements DeploymentRecordStore {
     this.locks = new TableClient(options.accountUrl, options.locksTable, credential);
   }
 
-  private ensureTables(): Promise<void> {
-    this.ensured ??= (async () => {
-      await this.records.createTable().catch((error: unknown) => {
-        if (statusOf(error) !== 409) throw error;
+  private async ensureTables(signal?: AbortSignal): Promise<void> {
+    if (!this.ensured) {
+      const setup = (async () => {
+        await this.records
+          .createTable(azureSdkOperationOptions(this.options.requestTimeoutMs))
+          .catch((error: unknown) => {
+            if (statusOf(error) !== 409) throw error;
+          });
+        await this.locks
+          .createTable(azureSdkOperationOptions(this.options.requestTimeoutMs))
+          .catch((error: unknown) => {
+            if (statusOf(error) !== 409) throw error;
+          });
+      })();
+      this.ensured = setup;
+      void setup.catch(() => {
+        if (this.ensured === setup) this.ensured = undefined;
       });
-      await this.locks.createTable().catch((error: unknown) => {
-        if (statusOf(error) !== 409) throw error;
-      });
-    })();
-    return this.ensured;
+    }
+    await awaitWithCancellation(this.ensured, signal);
   }
 
   private toEntity(record: DeploymentRecord): RecordEntity {
@@ -128,49 +179,94 @@ export class AzureTableDeploymentRecordStore implements DeploymentRecordStore {
     }
   }
 
-  public async put(record: DeploymentRecord): Promise<void> {
-    await this.ensureTables();
-    await this.records.upsertEntity(this.toEntity(record), 'Replace');
+  public async put(record: DeploymentRecord, signal?: AbortSignal): Promise<void> {
+    await this.ensureTables(signal);
+    await awaitWithCancellation(
+      this.records.upsertEntity(
+        this.toEntity(record),
+        'Replace',
+        azureSdkOperationOptions(this.options.requestTimeoutMs, signal),
+      ),
+      signal,
+    );
   }
 
   public async patch(
     id: string,
     principal: string,
     patch: DeploymentRecordPatch,
-  ): Promise<DeploymentRecord | undefined> {
-    const existing = await this.get(id, principal);
-    if (!existing) return undefined;
-    const updated: DeploymentRecord = {
-      ...existing,
-      ...patch,
-      updatedAt: patch.updatedAt ?? new Date().toISOString(),
-    };
-    await this.put(updated);
-    return updated;
+    signal?: AbortSignal,
+    options?: DeploymentRecordPatchOptions,
+  ): Promise<DeploymentRecordPatchResult | undefined> {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const entity = await this.getRecordEntity(id, principal, signal);
+      if (!entity) return undefined;
+      const existing = AzureTableDeploymentRecordStore.fromEntity(entity, principal);
+      if (!existing) {
+        throw internalError(`Deployment record ${id} is corrupt or incomplete`);
+      }
+      const result = applyDeploymentRecordPatch(existing, patch, options);
+      if (!result.applied) return result;
+
+      try {
+        await awaitWithCancellation(
+          this.records.updateEntity(this.toEntity(result.record), 'Replace', {
+            ...azureSdkOperationOptions(this.options.requestTimeoutMs, signal),
+            etag: entity.etag,
+          }),
+          signal,
+        );
+        return result;
+      } catch (error) {
+        if (statusOf(error) === 404) return undefined;
+        if (statusOf(error) !== 412) throw error;
+      }
+    }
+    throw conflict(
+      `Deployment record ${id} changed repeatedly while it was being updated. Retry the request.`,
+    );
   }
 
-  public async get(id: string, principal: string): Promise<DeploymentRecord | undefined> {
-    await this.ensureTables();
+  private async getRecordEntity(id: string, principal: string, signal?: AbortSignal) {
+    await this.ensureTables(signal);
     try {
-      const entity = await this.records.getEntity<RecordEntity>(principalKey(principal), id);
-      return AzureTableDeploymentRecordStore.fromEntity(entity, principal);
+      return await awaitWithCancellation(
+        this.records.getEntity<RecordEntity>(
+          principalKey(principal),
+          id,
+          azureSdkOperationOptions(this.options.requestTimeoutMs, signal),
+        ),
+        signal,
+      );
     } catch (error) {
       if (statusOf(error) === 404) return undefined;
       throw error;
     }
   }
 
+  public async get(
+    id: string,
+    principal: string,
+    signal?: AbortSignal,
+  ): Promise<DeploymentRecord | undefined> {
+    const entity = await this.getRecordEntity(id, principal, signal);
+    return entity ? AzureTableDeploymentRecordStore.fromEntity(entity, principal) : undefined;
+  }
+
   private async query(
     principal: string,
     filter: string,
     limit: number,
+    signal?: AbortSignal,
   ): Promise<readonly DeploymentRecord[]> {
-    await this.ensureTables();
+    await this.ensureTables(signal);
     const found: DeploymentRecord[] = [];
     const iterator = this.records.listEntities<RecordEntity>({
       queryOptions: { filter: `PartitionKey eq '${principalKey(principal)}' and ${filter}` },
+      ...azureSdkOperationOptions(this.options.requestTimeoutMs, signal),
     });
     for await (const entity of iterator) {
+      assertNotCancelled(signal);
       const record = AzureTableDeploymentRecordStore.fromEntity(entity, principal);
       if (record) found.push(record);
       if (found.length >= limit) break;
@@ -183,9 +279,15 @@ export class AzureTableDeploymentRecordStore implements DeploymentRecordStore {
   public async findByConfirmationHash(
     confirmationHash: string,
     principal: string,
+    signal?: AbortSignal,
   ): Promise<DeploymentRecord | undefined> {
     if (!/^[0-9a-f]{64}$/.test(confirmationHash)) return undefined;
-    const matches = await this.query(principal, `confirmationHash eq '${confirmationHash}'`, 5);
+    const matches = await this.query(
+      principal,
+      `confirmationHash eq '${confirmationHash}'`,
+      5,
+      signal,
+    );
     return matches[0];
   }
 
@@ -193,52 +295,138 @@ export class AzureTableDeploymentRecordStore implements DeploymentRecordStore {
     scopeKey: string,
     principal: string,
     limit: number,
+    signal?: AbortSignal,
   ): Promise<readonly DeploymentRecord[]> {
     // scopeKey is server-built from validated identifiers, so it cannot contain a quote.
-    return this.query(principal, `scopeKey eq '${scopeKey.replace(/'/g, "''")}'`, limit);
+    return this.query(principal, `scopeKey eq '${scopeKey.replace(/'/g, "''")}'`, limit, signal);
   }
 
-  public async withScopeLock<T>(scopeKey: string, run: () => Promise<T>): Promise<T> {
-    await this.ensureTables();
+  public async withScopeLock<T>(
+    scopeKey: string,
+    run: (leaseSignal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    await this.ensureTables(signal);
     const rowKey = scopeRowKey(scopeKey);
-    const entity: LockEntity = {
-      partitionKey: 'lock',
-      rowKey,
-      expiresAt: new Date(Date.now() + this.options.lockTtlMs).toISOString(),
-    };
+    const ownerId = randomUUID();
+    const operationOptions = (abortSignal?: AbortSignal) =>
+      azureSdkOperationOptions(this.options.requestTimeoutMs, abortSignal);
 
-    const acquire = async (): Promise<boolean> => {
+    const acquire = async (): Promise<string | undefined> => {
+      const entity: LockEntity = {
+        partitionKey: 'lock',
+        rowKey,
+        ownerId,
+        expiresAt: new Date(Date.now() + this.options.lockTtlMs).toISOString(),
+      };
       try {
-        await this.locks.createEntity(entity as unknown as TableEntity);
-        return true;
+        const created = await awaitWithCancellation(
+          this.locks.createEntity(entity, operationOptions(signal)),
+          signal,
+        );
+        if (created.etag) return created.etag;
+        return (await this.locks.getEntity<LockEntity>('lock', rowKey, operationOptions(signal)))
+          .etag;
       } catch (error) {
         if (statusOf(error) !== 409) throw error;
-        return false;
+        return undefined;
       }
     };
 
-    let acquired = await acquire();
-    if (!acquired) {
+    let lockEtag = await acquire();
+    if (!lockEtag) {
       // A lock whose lease has expired belonged to a replica that died mid-deployment. Reclaim it
-      // once, then give up: two live callers must not both proceed.
+      // conditionally, then give up: two live callers must not both proceed.
       const existing = await this.locks
-        .getEntity<LockEntity>('lock', rowKey)
-        .catch(() => undefined);
+        .getEntity<LockEntity>('lock', rowKey, operationOptions(signal))
+        .catch((error: unknown) => {
+          if (statusOf(error) === 404) return undefined;
+          throw error;
+        });
       if (existing && Date.parse(existing.expiresAt) < Date.now()) {
-        await this.locks.deleteEntity('lock', rowKey).catch(() => undefined);
-        acquired = await acquire();
+        try {
+          await this.locks.deleteEntity('lock', rowKey, {
+            ...operationOptions(signal),
+            etag: existing.etag,
+          });
+          lockEtag = await acquire();
+        } catch (error) {
+          if (statusOf(error) !== 404 && statusOf(error) !== 412) throw error;
+        }
       }
     }
-    if (!acquired) {
+    if (!lockEtag) {
       throw conflict(
         `Another deployment is already in progress for ${scopeKey}. Wait for it to finish before starting another.`,
       );
     }
+    let currentEtag = lockEtag;
+
+    const leaseController = new AbortController();
+    let stopped = false;
+    let renewalPending = Promise.resolve();
+    const renew = async (): Promise<void> => {
+      if (stopped || leaseController.signal.aborted) return;
+      try {
+        const renewed = await this.locks.updateEntity(
+          {
+            partitionKey: 'lock',
+            rowKey,
+            ownerId,
+            expiresAt: new Date(Date.now() + this.options.lockTtlMs).toISOString(),
+          },
+          'Replace',
+          {
+            ...operationOptions(),
+            etag: currentEtag,
+          },
+        );
+        if (renewed.etag) {
+          currentEtag = renewed.etag;
+        } else {
+          const current = await this.locks.getEntity<LockEntity>(
+            'lock',
+            rowKey,
+            operationOptions(),
+          );
+          if (current.ownerId !== ownerId) {
+            throw conflict(`The distributed deployment lock for ${scopeKey} changed owners.`);
+          }
+          currentEtag = current.etag;
+        }
+      } catch (error) {
+        leaseController.abort(error);
+      }
+    };
+    const renewalTimer = setInterval(
+      () => {
+        renewalPending = renewalPending.then(renew);
+      },
+      Math.floor(this.options.lockTtlMs / 3),
+    );
 
     try {
-      return await run();
+      return await run(leaseController.signal);
     } finally {
-      await this.locks.deleteEntity('lock', rowKey).catch(() => undefined);
+      stopped = true;
+      clearInterval(renewalTimer);
+      await renewalPending;
+      const current = await this.locks
+        .getEntity<LockEntity>('lock', rowKey, operationOptions())
+        .catch((error: unknown) => {
+          if (statusOf(error) === 404) return undefined;
+          throw error;
+        });
+      if (current?.ownerId === ownerId) {
+        await this.locks
+          .deleteEntity('lock', rowKey, {
+            ...operationOptions(),
+            etag: current.etag,
+          })
+          .catch((error: unknown) => {
+            if (statusOf(error) !== 404 && statusOf(error) !== 412) throw error;
+          });
+      }
     }
   }
 
@@ -246,14 +434,18 @@ export class AzureTableDeploymentRecordStore implements DeploymentRecordStore {
     return { kind: 'azure-table', detail: this.options.recordsTable };
   }
 
-  public async ping(): Promise<void> {
+  public async ping(signal?: AbortSignal): Promise<void> {
     try {
-      await this.ensureTables();
+      await this.ensureTables(signal);
       const iterator = this.records
-        .listEntities({ queryOptions: { filter: "PartitionKey eq 'probe'" } })
+        .listEntities({
+          queryOptions: { filter: "PartitionKey eq 'probe'" },
+          ...azureSdkOperationOptions(this.options.requestTimeoutMs, signal),
+        })
         .byPage({ maxPageSize: 1 });
-      await iterator.next();
+      await awaitWithCancellation(iterator.next(), signal);
     } catch (error) {
+      if (signal?.aborted) throw timedOut('The request was cancelled');
       throw internalError('The deployment record store is unreachable', error);
     }
   }

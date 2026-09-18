@@ -1,4 +1,4 @@
-import { AppError } from '../../errors.js';
+import { AppError, type ErrorCode } from '@agent-tool-platform/runtime/errors';
 
 interface RestErrorish {
   statusCode?: number;
@@ -23,50 +23,43 @@ export const mapAzureError = (error: unknown, context: string): AppError => {
   const azureCode = rest.details?.error?.code ?? rest.code;
   const azureMessage = rest.details?.error?.message ?? rest.message ?? 'Azure request failed';
   const details = { context, azureCode, status };
+  const mapped = (code: ErrorCode, message: string, retryable?: boolean): AppError =>
+    new AppError(code, message, details, retryable, error);
 
   if (rest.name === 'AbortError' || azureCode === 'REQUEST_ABORTED_ERROR') {
-    return new AppError('timeout', `${context}: request aborted`, { details, cause: error });
+    return mapped('timeout', `${context}: request aborted`);
   }
   if (rest.name === 'CredentialUnavailableError' || rest.name === 'AuthenticationError') {
-    return new AppError(
+    return mapped(
       'upstream_error',
       `${context}: unable to acquire an Azure token (${azureMessage})`,
-      { details, cause: error },
     );
   }
 
   switch (status) {
     case 400:
-      return new AppError('bad_request', `${context}: ${azureMessage}`, { details, cause: error });
+      return mapped('bad_request', `${context}: ${azureMessage}`);
     case 401:
-      return new AppError(
+      return mapped(
         'upstream_error',
         `${context}: Azure rejected the connector's token (${azureMessage})`,
-        { details, cause: error, retryable: true },
+        true,
       );
     case 403:
-      return new AppError(
+      return mapped(
         'forbidden',
         `${context}: the server identity is not authorized (${azureMessage})`,
-        { details, cause: error },
       );
     case 404:
-      return new AppError('not_found', `${context}: ${azureMessage}`, { details, cause: error });
+      return mapped('not_found', `${context}: ${azureMessage}`);
     case 409:
-      return new AppError('conflict', `${context}: ${azureMessage}`, { details, cause: error });
+      return mapped('conflict', `${context}: ${azureMessage}`);
     case 429:
-      return new AppError('rate_limited', `${context}: Azure throttled the request`, {
-        details,
-        cause: error,
-        retryable: true,
-      });
+      return mapped('rate_limited', `${context}: Azure throttled the request`, true);
     case 408:
     case 504:
-      return new AppError('timeout', `${context}: ${azureMessage}`, { details, cause: error });
+      return mapped('timeout', `${context}: ${azureMessage}`);
     default:
-      return new AppError('upstream_error', `${context}: ${azureMessage}`, {
-        details,
-        cause: error,
-      });
+      return mapped('upstream_error', `${context}: ${azureMessage}`);
   }
 };

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { platformEnvSchema } from '@agent-tool-platform/runtime/config';
 import { envSchema } from '../../src/config/index.js';
 import { GUID, findDeploymentSpecificHosts } from '../../scripts/lib/hygiene.js';
 
@@ -77,7 +78,10 @@ describe('server.json registry metadata', () => {
   });
 
   it('only advertises environment variables the server actually understands', () => {
-    const known = new Set(Object.keys(envSchema.shape));
+    const known = new Set([
+      ...Object.keys(platformEnvSchema.shape),
+      ...Object.keys(envSchema.shape),
+    ]);
     for (const entry of packages) {
       for (const variable of entry.environmentVariables ?? []) {
         expect(known, `${variable.name} is not part of the environment contract`).toContain(

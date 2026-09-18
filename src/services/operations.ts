@@ -1,6 +1,6 @@
 import type { Logger } from 'pino';
 import type { AzureProvider, AzureResource, ResourceRef } from '../provider/types.js';
-import { badRequest } from '../errors.js';
+import { badRequest, timedOut } from '@agent-tool-platform/runtime/errors';
 import {
   resourceGroupFromResourceId,
   subscriptionIdFromResourceId,
@@ -17,6 +17,7 @@ export interface OperationRequest {
   readonly principal?: string | undefined;
   readonly requestId?: string | undefined;
   readonly transport?: string | undefined;
+  readonly signal?: AbortSignal | undefined;
 }
 
 export interface OperationResult {
@@ -41,6 +42,10 @@ const EXPECTED_TYPE: Record<string, string> = {
   restart_web_app: 'microsoft.web/sites',
 };
 
+const assertNotCancelled = (signal: AbortSignal | undefined): void => {
+  if (signal?.aborted) throw timedOut('The request was cancelled');
+};
+
 /**
  * The constrained set of state-changing operations. Each one is:
  *   - allow-list scoped,
@@ -55,6 +60,7 @@ export class OperationsService {
     private readonly guardrails: Guardrails,
     private readonly logger: Logger,
     private readonly metrics: Metrics,
+    private readonly mutationTimeoutMs: number,
   ) {}
 
   private parseRef(resourceId: string): ResourceRef {
@@ -71,6 +77,7 @@ export class OperationsService {
     action: string,
     request: OperationRequest,
   ): Promise<{ ref: ResourceRef; resource: AzureResource; dryRun: boolean }> {
+    assertNotCancelled(request.signal);
     this.guardrails.assertResourceIdInScope(request.resourceId);
     const dryRun = this.guardrails.assertMutationAllowed({
       toolName: action,
@@ -79,7 +86,8 @@ export class OperationsService {
     });
 
     const ref = this.parseRef(request.resourceId);
-    const resource = await this.provider.getResourceById(request.resourceId);
+    const resource = await this.provider.getResourceById(request.resourceId, request.signal);
+    assertNotCancelled(request.signal);
 
     const expectedType = EXPECTED_TYPE[action];
     if (expectedType && resource.type.toLowerCase() !== expectedType) {
@@ -91,7 +99,12 @@ export class OperationsService {
     return { ref, resource, dryRun };
   }
 
-  private audit(action: string, request: OperationRequest, dryRun: boolean): void {
+  private audit(
+    action: string,
+    request: OperationRequest,
+    dryRun: boolean,
+    outcome: 'planned' | 'completed' | 'indeterminate',
+  ): void {
     this.logger.info(
       {
         event: 'azure.mutation',
@@ -103,24 +116,57 @@ export class OperationsService {
         subscriptionId: subscriptionIdFromResourceId(request.resourceId) ?? null,
         resourceGroup: resourceGroupFromResourceId(request.resourceId) ?? null,
         dryRun,
+        outcome,
         reason: request.reason ?? null,
         timestamp: new Date().toISOString(),
       },
       dryRun ? 'planned Azure mutation (dry run)' : 'executed Azure mutation',
     );
-    this.metrics.increment('mutations_total', { action, dryRun: String(dryRun) });
+    this.metrics.increment('mutations_total', { action, dryRun: String(dryRun), outcome });
+  }
+
+  private async withMutationDeadline<T>(
+    action: string,
+    execute: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.mutationTimeoutMs);
+    try {
+      return await execute(controller.signal);
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw timedOut(
+          `${action} did not report completion within ${this.mutationTimeoutMs}ms. Azure may ` +
+            'still complete the admitted operation; inspect provider state before retrying.',
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async run(
     action: string,
     request: OperationRequest,
-    execute: (ref: ResourceRef) => Promise<void>,
+    execute: (ref: ResourceRef, signal: AbortSignal) => Promise<void>,
   ): Promise<OperationResult> {
     const { ref, dryRun } = await this.prepare(action, request);
     if (!dryRun) {
-      await this.metrics.time('azure_mutation_ms', { action }, () => execute(ref));
+      assertNotCancelled(request.signal);
+      // After admission, finish the Azure operation and emit its audit record even if the caller
+      // disconnects. Cancelling an LRO after ARM may have accepted it creates an unsafe ambiguous
+      // outcome: the caller sees a timeout while the mutation can still complete.
+      try {
+        await this.metrics.time('azure_mutation_ms', { action }, () =>
+          this.withMutationDeadline(action, (deadlineSignal) => execute(ref, deadlineSignal)),
+        );
+      } catch (error) {
+        this.audit(action, request, false, 'indeterminate');
+        throw error;
+      }
     }
-    this.audit(action, request, dryRun);
+    this.audit(action, request, dryRun, dryRun ? 'planned' : 'completed');
 
     return {
       action,
@@ -134,19 +180,21 @@ export class OperationsService {
   }
 
   public restartVirtualMachine(request: OperationRequest): Promise<OperationResult> {
-    return this.run('restart_virtual_machine', request, (ref) =>
-      this.provider.restartVirtualMachine(ref),
+    return this.run('restart_virtual_machine', request, (ref, signal) =>
+      this.provider.restartVirtualMachine(ref, signal),
     );
   }
 
   public startVirtualMachine(request: OperationRequest): Promise<OperationResult> {
-    return this.run('start_virtual_machine', request, (ref) =>
-      this.provider.startVirtualMachine(ref),
+    return this.run('start_virtual_machine', request, (ref, signal) =>
+      this.provider.startVirtualMachine(ref, signal),
     );
   }
 
   public restartWebApp(request: OperationRequest): Promise<OperationResult> {
-    return this.run('restart_web_app', request, (ref) => this.provider.restartWebApp(ref));
+    return this.run('restart_web_app', request, (ref, signal) =>
+      this.provider.restartWebApp(ref, signal),
+    );
   }
 
   public async tagResource(request: TagOperationRequest): Promise<TagOperationResult> {
@@ -156,10 +204,19 @@ export class OperationsService {
     }
 
     const { dryRun } = await this.prepare(action, request);
-    const resource = dryRun
-      ? undefined
-      : await this.provider.setResourceTags(request.resourceId, request.tags);
-    this.audit(action, request, dryRun);
+    assertNotCancelled(request.signal);
+    let resource: AzureResource | undefined;
+    if (!dryRun) {
+      try {
+        resource = await this.withMutationDeadline(action, (deadlineSignal) =>
+          this.provider.setResourceTags(request.resourceId, request.tags, deadlineSignal),
+        );
+      } catch (error) {
+        this.audit(action, request, false, 'indeterminate');
+        throw error;
+      }
+    }
+    this.audit(action, request, dryRun, dryRun ? 'planned' : 'completed');
 
     return {
       action,

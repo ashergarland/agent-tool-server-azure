@@ -50,7 +50,7 @@ npm run test:coverage
 npm run build
 npm run openapi:emit -- /tmp/agent-tool-server-azure-openapi.json
 npm run openapi:check /tmp/agent-tool-server-azure-openapi.json
-npm run metadata:check
+npm run metadata:validate
 ```
 
 If formatting fails, run `npm run format`, review the result, and repeat the checks. Infrastructure

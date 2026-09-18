@@ -21,7 +21,7 @@ export const getActivityLogTool = defineTool({
       'You need performance or utilisation over time — use azure_get_resource_metrics.',
       'You want to know whether Azure itself is degraded — use azure_list_unhealthy_resources.',
     ],
-    requiredScope: 'Read access to the subscription; a resource id must be inside the allow-list.',
+    scope: 'Read access to the subscription; a resource id must be inside the allow-list.',
     changesState: false,
     prerequisites: ['azure_get_resource'],
   },
@@ -47,15 +47,18 @@ export const getActivityLogTool = defineTool({
       }),
     ),
   }),
-  handler: async (input, services) => ({
+  handler: async (input, services, context) => ({
     events: [
-      ...(await services.diagnostics.getActivityLog({
-        subscriptionId: input.subscriptionId,
-        resourceGroup: input.resourceGroup,
-        resourceId: input.resourceId,
-        lookbackHours: input.lookbackHours,
-        limit: input.limit,
-      })),
+      ...(await services.diagnostics.getActivityLog(
+        {
+          subscriptionId: input.subscriptionId,
+          resourceGroup: input.resourceGroup,
+          resourceId: input.resourceId,
+          lookbackHours: input.lookbackHours,
+          limit: input.limit,
+        },
+        context.signal,
+      )),
     ],
   }),
 });
@@ -78,7 +81,7 @@ export const getMetricsTool = defineTool({
       'You need the configuration of the resource — use azure_get_resource.',
       'You need to know who changed something — use azure_get_activity_log.',
     ],
-    requiredScope: 'Read access to the subscription containing the resource.',
+    scope: 'Read access to the subscription containing the resource.',
     changesState: false,
     prerequisites: ['azure_get_resource'],
   },
@@ -104,14 +107,17 @@ export const getMetricsTool = defineTool({
       }),
     ),
   }),
-  handler: async (input, services) => {
-    const result = await services.diagnostics.getMetrics({
-      resourceId: input.resourceId,
-      metricNames: input.metricNames,
-      lookbackHours: input.lookbackHours,
-      intervalIso8601: input.interval,
-      aggregation: input.aggregation,
-    });
+  handler: async (input, services, context) => {
+    const result = await services.diagnostics.getMetrics(
+      {
+        resourceId: input.resourceId,
+        metricNames: input.metricNames,
+        lookbackHours: input.lookbackHours,
+        intervalIso8601: input.interval,
+        aggregation: input.aggregation,
+      },
+      context.signal,
+    );
     return {
       resourceId: result.resourceId,
       timespan: result.timespan,
@@ -147,7 +153,7 @@ export const getUnhealthyResourcesTool = defineTool({
       'Nothing is reported as broken and you are doing routine inventory — use ' +
         'azure_search_resources.',
     ],
-    requiredScope: 'Read access to the searched subscriptions.',
+    scope: 'Read access to the searched subscriptions.',
     changesState: false,
     nextSteps: ['azure_get_activity_log', 'azure_get_resource_metrics'],
   },
@@ -166,13 +172,16 @@ export const getUnhealthyResourcesTool = defineTool({
       }),
     ),
   }),
-  handler: async (input, services) => ({
+  handler: async (input, services, context) => ({
     unhealthyResources: [
-      ...(await services.diagnostics.getUnhealthyResources({
-        subscriptionIds: input.subscriptionIds,
-        resourceGroup: input.resourceGroup,
-        limit: input.limit,
-      })),
+      ...(await services.diagnostics.getUnhealthyResources(
+        {
+          subscriptionIds: input.subscriptionIds,
+          resourceGroup: input.resourceGroup,
+          limit: input.limit,
+        },
+        context.signal,
+      )),
     ],
   }),
 });

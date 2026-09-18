@@ -49,14 +49,21 @@ param tenantDeploymentsEnabled bool = false
 @description('Report a subscription as usable only after asking ARM what the identities can do there.')
 param verifyRbac bool = true
 
+@description('Per-request Azure ARM transport timeout, in milliseconds.')
+@minValue(1000)
+@maxValue(600000)
+param armRequestTimeoutMs int = 30000
+
+@description('Overall timeout for an admitted guarded mutation, including Azure LRO polling.')
+@minValue(10000)
+@maxValue(1800000)
+param mutationTimeoutMs int = 600000
+
 @description('Grant the operator role and enable the four guarded state-changing tools.')
 param enableMutations bool = false
 
 @description('Require explicit user confirmation for state-changing tools.')
 param mutationConfirmationRequired bool = true
-
-@description('Expose the authenticated remote MCP endpoint at /mcp.')
-param enableMcpHttp bool = true
 
 @description('''
 Enable generic Bicep validate, what-if, deploy, status and rollback.
@@ -118,12 +125,20 @@ param maxBodyBytes int = 4194304
 @minValue(0)
 param rateLimitMax int = 120
 
+@description('Pre-authentication request budget inside the rate limit window.')
+@minValue(0)
+param preAuthRateLimitMax int = 30
+
 @description('Rate limit window, in milliseconds.')
 @minValue(1000)
 param rateLimitWindowMs int = 60000
 
-@description('Per-request timeout, in milliseconds.')
-param requestTimeoutMs int = 30000
+@description('Fastify trust-proxy setting. Keep false unless the exact ingress proxy chain is known.')
+param trustProxy string = 'false'
+
+@description('Generic per-request timeout in milliseconds. Keep zero so provider-specific operation budgets remain authoritative.')
+@minValue(0)
+param requestTimeoutMs int = 0
 
 @description('How long to drain in-flight requests on SIGTERM, in milliseconds.')
 param shutdownGraceMs int = 10000
@@ -272,9 +287,7 @@ module rbac 'modules/rbac.bicep' = {
     deploymentPrincipalId: enableDeployments ? deploymentIdentity!.outputs.principalId : ''
     readRoleDefinitionIds: readRoles
     operatorRoleDefinitionId: enableMutations ? customRoles.outputs.operatorRoleDefinitionId : ''
-    deploymentRoleDefinitionId: enableDeployments
-      ? customRoles.outputs.deploymentRunnerRoleDefinitionId
-      : ''
+    deploymentRoleDefinitionId: enableDeployments ? customRoles.outputs.deploymentRunnerRoleDefinitionId : ''
     resourceGroupNames: allowedResourceGroups
   }
 }
@@ -303,9 +316,10 @@ module containerApp 'modules/container-app.bicep' = if (deployApp) {
     allowedManagementGroupIds: join(allowedManagementGroupIds, ',')
     tenantDeploymentsEnabled: tenantDeploymentsEnabled
     verifyRbac: verifyRbac
+    armRequestTimeoutMs: armRequestTimeoutMs
+    mutationTimeoutMs: mutationTimeoutMs
     mutationsEnabled: enableMutations
     mutationConfirmationRequired: mutationConfirmationRequired
-    mcpHttpEnabled: enableMcpHttp
     deploymentsEnabled: enableDeployments
     bicepCliPath: bicepCliPath
     bicepCliSha256: bicepCliSha256
@@ -321,15 +335,13 @@ module containerApp 'modules/container-app.bicep' = if (deployApp) {
     deploymentMaxConcurrent: deploymentMaxConcurrent
     deploymentRecordStore: enableDeployments ? 'azure-table' : 'memory'
     deploymentRecordTableEndpoint: enableDeployments ? recordStorage!.outputs.tableEndpoint : ''
-    deploymentRecordTableName: enableDeployments
-      ? recordStorage!.outputs.recordsTableName
-      : 'deploymentrecords'
-    deploymentLockTableName: enableDeployments
-      ? recordStorage!.outputs.locksTableName
-      : 'deploymentlocks'
+    deploymentRecordTableName: enableDeployments ? recordStorage!.outputs.recordsTableName : 'deploymentrecords'
+    deploymentLockTableName: enableDeployments ? recordStorage!.outputs.locksTableName : 'deploymentlocks'
     maxBodyBytes: maxBodyBytes
     rateLimitMax: rateLimitMax
+    preAuthRateLimitMax: preAuthRateLimitMax
     rateLimitWindowMs: rateLimitWindowMs
+    trustProxy: trustProxy
     requestTimeoutMs: requestTimeoutMs
     shutdownGraceMs: shutdownGraceMs
     cpu: cpu
@@ -362,12 +374,8 @@ module monitoring 'modules/monitoring.bicep' = if (deployApp && enableHealthAler
 output resourceGroupName string = serverResourceGroup.name
 output identityClientId string = identity.outputs.clientId
 output identityPrincipalId string = identity.outputs.principalId
-output deploymentIdentityClientId string = enableDeployments
-  ? deploymentIdentity!.outputs.clientId
-  : ''
-output deploymentIdentityPrincipalId string = enableDeployments
-  ? deploymentIdentity!.outputs.principalId
-  : ''
+output deploymentIdentityClientId string = enableDeployments ? deploymentIdentity!.outputs.clientId : ''
+output deploymentIdentityPrincipalId string = enableDeployments ? deploymentIdentity!.outputs.principalId : ''
 output operatorRoleDefinitionId string = customRoles.outputs.operatorRoleDefinitionId
 output deploymentRunnerRoleDefinitionId string = customRoles.outputs.deploymentRunnerRoleDefinitionId
 output registryLoginServer string = registry.outputs.loginServer
@@ -375,4 +383,4 @@ output keyVaultName string = keyVault.outputs.name
 output recordTableEndpoint string = enableDeployments ? recordStorage!.outputs.tableEndpoint : ''
 output serverUrl string = deployApp ? 'https://${containerApp!.outputs.fqdn}' : ''
 output openApiUrl string = deployApp ? 'https://${containerApp!.outputs.fqdn}/openapi.json' : ''
-output mcpUrl string = deployApp && enableMcpHttp ? 'https://${containerApp!.outputs.fqdn}/mcp' : ''
+output mcpUrl string = deployApp ? 'https://${containerApp!.outputs.fqdn}/mcp' : ''

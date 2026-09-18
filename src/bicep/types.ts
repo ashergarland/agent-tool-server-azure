@@ -67,5 +67,5 @@ export interface BicepCompilerInfo {
 export interface BicepCompiler {
   compile(request: BicepCompileRequest): Promise<BicepCompileResult>;
   /** Cheap readiness probe. Must never throw. */
-  describe(): Promise<BicepCompilerInfo>;
+  describe(signal?: AbortSignal): Promise<BicepCompilerInfo>;
 }

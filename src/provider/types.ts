@@ -66,6 +66,7 @@ export interface ResourceGraphQueryInput {
   readonly query: string;
   readonly top: number;
   readonly skipToken?: string;
+  readonly signal?: AbortSignal;
 }
 
 export interface ActivityLogQueryInput {
@@ -75,6 +76,7 @@ export interface ActivityLogQueryInput {
   readonly resourceGroup?: string;
   readonly resourceId?: string;
   readonly top: number;
+  readonly signal?: AbortSignal;
 }
 
 export interface MetricsQueryInput {
@@ -84,6 +86,7 @@ export interface MetricsQueryInput {
   readonly until: Date;
   readonly intervalIso8601: string;
   readonly aggregation: 'Average' | 'Minimum' | 'Maximum' | 'Total' | 'Count';
+  readonly signal?: AbortSignal;
 }
 
 export interface ResourceRef {
@@ -175,19 +178,23 @@ export interface EffectivePermission {
 }
 
 export interface AzureProvider {
-  listSubscriptions(): Promise<readonly Subscription[]>;
-  listResourceGroups(subscriptionId: string): Promise<readonly ResourceGroup[]>;
-  getResourceById(resourceId: string): Promise<AzureResource>;
+  listSubscriptions(signal?: AbortSignal): Promise<readonly Subscription[]>;
+  listResourceGroups(
+    subscriptionId: string,
+    signal?: AbortSignal,
+  ): Promise<readonly ResourceGroup[]>;
+  getResourceById(resourceId: string, signal?: AbortSignal): Promise<AzureResource>;
   queryResourceGraph(input: ResourceGraphQueryInput): Promise<ResourceGraphPage>;
   listActivityLog(input: ActivityLogQueryInput): Promise<readonly ActivityLogEntry[]>;
   listMetrics(input: MetricsQueryInput): Promise<readonly MetricSeries[]>;
 
-  restartVirtualMachine(ref: ResourceRef): Promise<void>;
-  startVirtualMachine(ref: ResourceRef): Promise<void>;
-  restartWebApp(ref: ResourceRef): Promise<void>;
+  restartVirtualMachine(ref: ResourceRef, signal?: AbortSignal): Promise<void>;
+  startVirtualMachine(ref: ResourceRef, signal?: AbortSignal): Promise<void>;
+  restartWebApp(ref: ResourceRef, signal?: AbortSignal): Promise<void>;
   setResourceTags(
     resourceId: string,
     tags: Readonly<Record<string, string>>,
+    signal?: AbortSignal,
   ): Promise<AzureResource>;
 
   /**
@@ -197,15 +204,21 @@ export interface AzureProvider {
   getEffectivePermissions(
     armScope: string,
     identity: 'operator' | 'deployment',
+    signal?: AbortSignal,
   ): Promise<readonly EffectivePermission[]>;
 
   whatIfDeployment(request: ArmDeploymentRequest): Promise<ArmWhatIfResult>;
   /** Starts the deployment and returns immediately; callers poll with {@link getDeployment}. */
   beginDeployment(request: ArmDeploymentRequest): Promise<ArmDeploymentStatus>;
-  getDeployment(scope: DeploymentScope, deploymentName: string): Promise<ArmDeploymentStatus>;
+  getDeployment(
+    scope: DeploymentScope,
+    deploymentName: string,
+    signal?: AbortSignal,
+  ): Promise<ArmDeploymentStatus>;
   listDeploymentOperations(
     scope: DeploymentScope,
     deploymentName: string,
     options: { readonly top: number; readonly skipToken: string | undefined },
+    signal?: AbortSignal,
   ): Promise<ArmDeploymentOperationPage>;
 }
