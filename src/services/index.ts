@@ -48,10 +48,8 @@ export const createServices = (
       maxOutputBytes: config.bicep.maxOutputBytes,
       maxConcurrency: config.bicep.maxConcurrency,
       modulePolicy: config.bicep.modulePolicy,
-      runAsUid: config.bicep.runAsUid,
-      runAsGid: config.bicep.runAsGid,
     });
-  const store = options.store ?? createDeploymentRecordStore(config);
+  const store = options.store ?? createDeploymentRecordStore(config, logger);
 
   return {
     guardrails,
@@ -60,7 +58,13 @@ export const createServices = (
     deploymentStore: store,
     inventory: new InventoryService(provider, guardrails, config),
     diagnostics: new DiagnosticsService(provider, guardrails),
-    operations: new OperationsService(provider, guardrails, logger, metrics),
+    operations: new OperationsService(
+      provider,
+      guardrails,
+      logger,
+      metrics,
+      config.azure.mutationTimeoutMs,
+    ),
     deployments: new DeploymentService({
       provider,
       guardrails,

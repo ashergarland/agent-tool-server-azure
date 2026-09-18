@@ -9,8 +9,7 @@
  *   npx tsx <this file> <subscription-id> <existing-resource-group> <region>
  */
 import { createApplication } from '../src/app.js';
-import { buildConfig, envSchema } from '../src/config/index.js';
-import { buildReadinessReport } from '../src/server/ready.js';
+import { loadConfig } from '../src/config/index.js';
 
 const [subscriptionId, resourceGroup, region] = process.argv.slice(2);
 if (!subscriptionId || !resourceGroup || !region) {
@@ -33,28 +32,25 @@ const check = async (step: string, run: () => Promise<string>): Promise<void> =>
   }
 };
 
-const config = buildConfig(
-  envSchema.parse({
-    NODE_ENV: 'development',
-    AUTH_MODE: 'disabled',
-    LOG_LEVEL: 'silent',
-    AZURE_SUBSCRIPTION_IDS: subscriptionId,
-    // Mutations stay off. Even if a tool were called by mistake, it could not change anything.
-    MUTATIONS_ENABLED: 'false',
-    DEPLOYMENTS_ENABLED: 'true',
-    BICEP_CLI_PATH: process.env['BICEP_CLI_PATH'] ?? '',
-    ...(process.env['BICEP_CLI_SHA256']
-      ? { BICEP_CLI_SHA256: process.env['BICEP_CLI_SHA256'] }
-      : {}),
-  }),
-);
+const config = loadConfig({
+  NODE_ENV: 'development',
+  AUTH_MODE: 'disabled',
+  LOG_LEVEL: 'silent',
+  AZURE_SUBSCRIPTION_IDS: subscriptionId,
+  // Mutations stay off. Even if a tool were called by mistake, it could not change anything.
+  MUTATIONS_ENABLED: 'false',
+  DEPLOYMENTS_ENABLED: 'true',
+  BICEP_CLI_PATH: process.env['BICEP_CLI_PATH'] ?? '',
+  ...(process.env['BICEP_CLI_SHA256'] ? { BICEP_CLI_SHA256: process.env['BICEP_CLI_SHA256'] } : {}),
+});
 
-const app = createApplication({ config });
+const app = await createApplication({ config });
 const { services, registry } = app;
 const context = {
   requestId: 'live-verify',
-  principal: 'live:operator',
+  principal: { id: 'live:operator', kind: 'anonymous' as const },
   transport: 'http',
+  signal: new AbortController().signal,
 } as const;
 
 const invoke = <T>(tool: string, input: unknown): Promise<T> =>
@@ -67,10 +63,10 @@ console.log(
 /* ------------------------------------------------------------------ identity and readiness */
 
 await check('readiness reports the real compiler and identity', async () => {
-  const report = await buildReadinessReport(config, registry, services);
-  const compiler = report.components['bicepCompiler'];
-  if (compiler?.state !== 'ok' && compiler?.state !== 'degraded') {
-    throw new Error(`bicepCompiler is ${compiler?.state}: ${compiler?.detail}`);
+  const report = await app.readiness();
+  const compiler = report.checks.find((check) => check.name === 'bicep-compiler');
+  if (compiler?.state !== 'ready' && compiler?.state !== 'degraded') {
+    throw new Error(`bicep-compiler is ${compiler?.state}: ${compiler?.detail}`);
   }
   return `ready=${report.ready}, compiler=${compiler.state} (${compiler.detail})`;
 });
@@ -262,7 +258,7 @@ await check('azure_what_if_bicep against real ARM (predicts only, creates nothin
   return `changes=${JSON.stringify(result.summary.countsByChangeType)}, scope=${result.scope.armScope}, hash=${result.confirmationHash.slice(0, 12)}…`;
 });
 
-await check('a tampered confirmation hash is refused', async () => {
+await check('deployment execution is refused by the read-only mutation gate', async () => {
   if (!confirmationHash) return 'skipped: no preview was produced';
   try {
     await invoke('azure_deploy_bicep', {
@@ -279,7 +275,7 @@ await check('a tampered confirmation hash is refused', async () => {
     throw new Error('a tampered deployment was accepted');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (!/differ from the previewed deployment/.test(message)) throw error;
+    if (!/mutations are disabled/i.test(message)) throw error;
     return 'refused, as intended (nothing was deployed)';
   }
 });

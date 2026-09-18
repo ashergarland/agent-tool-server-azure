@@ -33,14 +33,14 @@ export const listSubscriptionsTool = defineTool({
       'You need resource groups rather than subscriptions — use azure_list_resource_groups.',
       'You already hold an approved plan and a confirmationHash — apply it with azure_deploy_bicep.',
     ],
-    requiredScope: 'None beyond the configured allow-list; this is the entry point.',
+    scope: 'None beyond the configured allow-list; this is the entry point.',
     changesState: false,
     nextSteps: ['azure_list_resource_groups', 'azure_search_resources'],
   },
   inputSchema: z.object({}).describe('No input.'),
   outputSchema: z.object({ subscriptions: z.array(subscriptionSchema) }),
-  handler: async (_input, services) => ({
-    subscriptions: [...(await services.inventory.listSubscriptions())],
+  handler: async (_input, services, context) => ({
+    subscriptions: [...(await services.inventory.listSubscriptions(context.signal))],
   }),
 });
 
@@ -61,15 +61,17 @@ export const listResourceGroupsTool = defineTool({
     doNotUseWhen: [
       'You want the resources themselves rather than the containers — use azure_search_resources.',
     ],
-    requiredScope: 'Read access to the named subscription.',
+    scope: 'Read access to the named subscription.',
     changesState: false,
     prerequisites: ['azure_list_subscriptions'],
     nextSteps: ['azure_search_resources'],
   },
   inputSchema: z.object({ subscriptionId }),
   outputSchema: z.object({ resourceGroups: z.array(resourceGroupSchema) }),
-  handler: async (input, services) => ({
-    resourceGroups: [...(await services.inventory.listResourceGroups(input.subscriptionId))],
+  handler: async (input, services, context) => ({
+    resourceGroups: [
+      ...(await services.inventory.listResourceGroups(input.subscriptionId, context.signal)),
+    ],
   }),
 });
 
@@ -97,7 +99,7 @@ export const searchResourcesTool = defineTool({
       'You are checking whether a deployment you just ran succeeded — use azure_get_deployment, ' +
         'because a freshly created resource may not be indexed here yet.',
     ],
-    requiredScope: 'Read access to the searched subscriptions.',
+    scope: 'Read access to the searched subscriptions.',
     changesState: false,
     prerequisites: ['azure_list_subscriptions'],
     nextSteps: ['azure_get_resource'],
@@ -123,18 +125,21 @@ export const searchResourcesTool = defineTool({
     skipToken: z.string().optional(),
     scope: z.array(z.string()),
   }),
-  handler: async (input, services) => {
-    const result = await services.inventory.searchResources({
-      subscriptionIds: input.subscriptionIds,
-      resourceGroup: input.resourceGroup,
-      resourceType: input.resourceType,
-      location: input.location,
-      nameContains: input.nameContains,
-      tagName: input.tagName,
-      tagValue: input.tagValue,
-      limit: input.limit,
-      skipToken: input.skipToken,
-    });
+  handler: async (input, services, context) => {
+    const result = await services.inventory.searchResources(
+      {
+        subscriptionIds: input.subscriptionIds,
+        resourceGroup: input.resourceGroup,
+        resourceType: input.resourceType,
+        location: input.location,
+        nameContains: input.nameContains,
+        tagName: input.tagName,
+        tagValue: input.tagValue,
+        limit: input.limit,
+        skipToken: input.skipToken,
+      },
+      context.signal,
+    );
     return {
       resources: [...result.resources],
       ...(result.totalRecords === undefined ? {} : { totalRecords: result.totalRecords }),
@@ -162,14 +167,14 @@ export const getResourceTool = defineTool({
       'You only have a name or a description — find the id with azure_search_resources first.',
       'You want time series behaviour — use azure_get_resource_metrics.',
     ],
-    requiredScope: 'Read access to the subscription that contains the resource.',
+    scope: 'Read access to the subscription that contains the resource.',
     changesState: false,
     prerequisites: ['azure_search_resources'],
   },
   inputSchema: z.object({ resourceId }),
   outputSchema: z.object({ resource: resourceSchema }),
-  handler: async (input, services) => ({
-    resource: await services.inventory.getResource(input.resourceId),
+  handler: async (input, services, context) => ({
+    resource: await services.inventory.getResource(input.resourceId, context.signal),
   }),
 });
 
@@ -195,7 +200,7 @@ export const runGraphQueryTool = defineTool({
       'You are tempted to write a query that changes data; Resource Graph is read-only and such ' +
         'queries are rejected.',
     ],
-    requiredScope: 'Read access to the queried subscriptions.',
+    scope: 'Read access to the queried subscriptions.',
     changesState: false,
   },
   inputSchema: z.object({
@@ -214,13 +219,16 @@ export const runGraphQueryTool = defineTool({
     skipToken: z.string().optional(),
     scope: z.array(z.string()),
   }),
-  handler: async (input, services) => {
-    const result = await services.inventory.runGraphQuery({
-      subscriptionIds: input.subscriptionIds,
-      query: input.query,
-      limit: input.limit,
-      skipToken: input.skipToken,
-    });
+  handler: async (input, services, context) => {
+    const result = await services.inventory.runGraphQuery(
+      {
+        subscriptionIds: input.subscriptionIds,
+        query: input.query,
+        limit: input.limit,
+        skipToken: input.skipToken,
+      },
+      context.signal,
+    );
     return {
       rows: [...result.rows],
       ...(result.totalRecords === undefined ? {} : { totalRecords: result.totalRecords }),

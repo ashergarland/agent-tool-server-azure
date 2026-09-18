@@ -61,9 +61,10 @@ similar is a validation error, not an ignored field.
 - Deployments need `DEPLOYMENTS_ENABLED`, `confirm=true`, a reason, and a `confirmationHash` from a
   recent what-if over identical source, parameters, scope and mode. The server recompiles what it is
   sent and recomputes the hash; any difference is refused with `conflict`.
-- Previews expire. Records are isolated per principal. A per-scope lock prevents two concurrent
-  deployments to the same scope, and a retried deploy reports the existing deployment instead of
-  starting a second one.
+- Previews expire. Records are isolated per principal. An owner-bound, conditionally updated
+  per-scope lease prevents concurrent deployments to the same scope. A retried deploy first
+  reconciles the deterministic deployment name and only repeats the identical idempotent PUT when
+  Azure reports that name absent.
 - Only Incremental mode is issued. ARM Complete mode, which deletes everything absent from the
   template, is never used and is refused in nested deployments.
 
@@ -144,9 +145,10 @@ changes as unsupported or ignored. Those are surfaced verbatim. State can also c
 preview and the deployment; the confirmation hash binds the _plan_, not the world.
 
 **Remote modules are a supply-chain decision.** With `BICEP_REMOTE_MODULES_ENABLED=true` the
-compiler is allowed to reach configured OCI registries or Template Specs during restore. Content
-pulled that way is inspected after compilation like any other template, but you are trusting the
-registry, its tags and its transport. It is off by default for that reason.
+compiler is allowed to reach configured OCI registries during restore. Content pulled that way is
+inspected after compilation like any other template, but you are trusting the registry, its tags
+and its transport. It is off by default for that reason. Template Specs are not supported because
+their compiled form retains an external template link whose content cannot be inspected locally.
 
 **The record store sees deployment metadata.** Compiled templates are retained to make rollback
 possible. Anyone with data-plane access to that storage account can read them. They contain no

@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0",
+  "fixture": true,
+  "provider": "azure",
+  "mode": "mock-read-only",
+  "credentialsRequired": false,
+  "request": {
+    "operation": "getContainerAppRevision",
+    "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/benchmark-fixture/providers/Microsoft.App/containerApps/checkout-api/revisions/checkout-api--pr-1842"
+  },
+  "response": {
+    "name": "checkout-api--pr-1842",
+    "provisioningState": "Succeeded",
+    "runningState": "Degraded",
+    "replicas": {
+      "desired": 1,
+      "ready": 0
+    },
+    "ingress": {
+      "external": true,
+      "targetPort": 8080,
+      "transport": "Auto"
+    },
+    "containers": [
+      {
+        "name": "checkout-api",
+        "image": "registry.invalid/checkout-api@sha256:2bf87a5c0d23",
+        "environmentVariableNames": ["NODE_ENV", "APP_PORT"],
+        "readinessProbe": {
+          "transport": "TCP",
+          "port": 8080,
+          "lastResult": "ConnectionRefused"
+        },
+        "latestConsoleEvent": {
+          "event": "server_started",
+          "address": "0.0.0.0",
+          "port": 3000,
+          "healthPath": "/healthz"
+        }
+      }
+    ],
+    "registryImagePull": {
+      "state": "Succeeded"
+    },
+    "providerErrors": []
+  }
+}

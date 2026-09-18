@@ -63,11 +63,13 @@ therefore overrides exactly four values, all of which are genuinely computed at 
 To change a deployment, update and review its file in private desired state, then run a release with
 that same path. Never pass one-off `--parameters` on the command line to make a change stick. The
 format remains the existing ARM deployment parameter format; this repository does not define a
-broader deployment-profile contract.
+public operator instance. The account-neutral supported forms are declared separately in
+[`capability-profiles.json`](../capability-profiles.json); concrete selected profile, identity,
+scope, artifact digest and desired-state values belong in private operator state.
 
 The public `infra/parameters/nonlive.example.parameters.json` file is deliberately named as an
 example, selects only the synthetic `example` label, has an empty subscription scope and keeps
-mutations, generic deployments, remote MCP and alerts disabled. It is a shape and safety reference,
+mutations, generic deployments and alerts disabled. It is a shape and safety reference,
 not operator desired state. Create a separate file in private storage for any real deployment.
 
 The region remains an explicit script argument and is picked up by `deployment().location`. Real
@@ -195,6 +197,7 @@ This is the highest-privilege capability the server has. Enable it deliberately.
 2. In the private operator parameter file set:
 
    ```jsonc
+   "enableMutations":   { "value": true },
    "enableDeployments": { "value": true },
    "bicepCliSha256":    { "value": "<the digest from step 1>" }
    ```
@@ -218,6 +221,10 @@ This is the highest-privilege capability the server has. Enable it deliberately.
    Templates that create role assignments additionally require a privileged role such as
    _Role Based Access Control Administrator_. **Do not grant Owner.**
 
+Platform's mutation gate and the Azure deployment gate are independent: what-if remains available
+with mutations disabled, but deploy and rollback execution require both `enableMutations=true` and
+`enableDeployments=true`.
+
 Startup validation refuses to run in production with deployments enabled unless there is a pinned
 compiler digest, a separate deployment identity, `azure-table` record storage and an explicit
 subscription allow-list.
@@ -225,9 +232,9 @@ subscription allow-list.
 ### Remote modules
 
 Off by default. If you enable `bicepRemoteModulesEnabled`, you must also list the OCI registries the
-compiler may pull from, or enable Template Specs. Read the
-[threat model](threat-model.md#residual-risk-and-non-goals) first: you are trusting that registry,
-its tags and its transport.
+compiler may pull from. Template Specs are not supported because their compiled external template
+link cannot be inspected locally. Read the [threat model](threat-model.md#residual-risk-and-non-goals)
+first: you are trusting the configured registry, its tags and its transport.
 
 ## Permissions: caller versus managed identity
 
@@ -289,12 +296,13 @@ comma-separated list, so you can run two keys briefly to make a zero-downtime ro
 ## Monitoring and observability
 
 - `/health` — liveness. Used by the liveness and startup probes.
-- `/ready` — readiness. Reports the registry, the record store, the pinned compiler, identity
-  configuration, scopes and capabilities. Returns `503` when a required component is unavailable.
-  Used by the readiness probe, so a dependency failure drains traffic without restarting a healthy
-  container.
-- `/metrics` — authenticated. Counters and latency summaries for tool invocations, compiler work,
-  ARM what-if and deploy calls, deployments started and completed, authentication and rate limiting.
+- `/ready` — provider readiness, distinct from process health. It performs read-only Azure provider
+  and effective-RBAC checks and, when selected, checks operation RBAC, deployment RBAC, the pinned
+  compiler and the record store. Details are bounded and do not expose raw provider errors or
+  account identifiers. A required failure returns `503`.
+- `/metrics` — authenticated capability metrics for constrained operations, compiler work, ARM
+  what-if and deploy calls, and deployments started and completed. Platform owns generic
+  invocation, authentication, lifecycle and rate-limit telemetry.
 - Structured logs go to Log Analytics. Useful queries:
 
   ```kusto

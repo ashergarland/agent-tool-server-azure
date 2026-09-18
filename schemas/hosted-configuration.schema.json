@@ -1,0 +1,779 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:io:github.ashergarland:agent-tool-server-azure:hosted-configuration:v1",
+  "title": "Azure Agent Tool Server hosted configuration",
+  "description": "Account-neutral, non-secret environment configuration. Secret values and concrete Azure deployment identities remain operator-owned and are bound separately.",
+  "type": "object",
+  "properties": {
+    "NODE_ENV": {
+      "type": "string",
+      "const": "production"
+    },
+    "HOST": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "PORT": {
+      "$ref": "#/$defs/port"
+    },
+    "LOG_LEVEL": {
+      "type": "string",
+      "enum": ["fatal", "error", "warn", "info", "debug", "trace", "silent"]
+    },
+    "SERVICE_NAME": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "SERVICE_VERSION": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "GIT_SHA": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "PUBLIC_BASE_URL": {
+      "type": "string",
+      "format": "uri",
+      "maxLength": 2048
+    },
+    "BODY_LIMIT_BYTES": {
+      "$ref": "#/$defs/bodyLimit"
+    },
+    "TRUST_PROXY": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 32
+        },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      ]
+    },
+    "RATE_LIMIT_MAX": {
+      "$ref": "#/$defs/rateLimit"
+    },
+    "RATE_LIMIT_WINDOW_MS": {
+      "$ref": "#/$defs/rateLimitWindow"
+    },
+    "PRE_AUTH_RATE_LIMIT_MAX": {
+      "$ref": "#/$defs/rateLimit"
+    },
+    "SHUTDOWN_GRACE_MS": {
+      "$ref": "#/$defs/shutdownGrace"
+    },
+    "REQUEST_TIMEOUT_MS": {
+      "$ref": "#/$defs/requestTimeout"
+    },
+    "AUTH_MODE": {
+      "type": "string",
+      "enum": ["api-key", "entra-jwt"]
+    },
+    "ENTRA_TENANT_ID": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "ENTRA_AUDIENCE": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "ENTRA_ALLOWED_APP_IDS": {
+      "$ref": "#/$defs/csv"
+    },
+    "ENTRA_CLOCK_TOLERANCE_SECONDS": {
+      "$ref": "#/$defs/clockTolerance"
+    },
+    "ENTRA_JWKS_URI": {
+      "type": "string",
+      "format": "uri",
+      "maxLength": 2048
+    },
+    "MUTATIONS_ENABLED": {
+      "$ref": "#/$defs/booleanish"
+    },
+    "MUTATION_CONFIRMATION_REQUIRED": {
+      "$ref": "#/$defs/booleanish"
+    },
+    "AZURE_TENANT_ID": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "AZURE_CLIENT_ID": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "AZURE_DEPLOYMENT_CLIENT_ID": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "AZURE_SUBSCRIPTION_IDS": {
+      "$ref": "#/$defs/csv"
+    },
+    "AZURE_ALLOWED_RESOURCE_GROUPS": {
+      "$ref": "#/$defs/csv"
+    },
+    "AZURE_ALLOWED_MANAGEMENT_GROUP_IDS": {
+      "$ref": "#/$defs/csv"
+    },
+    "AZURE_TENANT_DEPLOYMENTS_ENABLED": {
+      "$ref": "#/$defs/booleanish"
+    },
+    "AZURE_ARM_ENDPOINT": {
+      "type": "string",
+      "format": "uri",
+      "maxLength": 2048
+    },
+    "AZURE_ARM_REQUEST_TIMEOUT_MS": {
+      "$ref": "#/$defs/armRequestTimeout"
+    },
+    "AZURE_MUTATION_TIMEOUT_MS": {
+      "$ref": "#/$defs/mutationTimeout"
+    },
+    "AZURE_VERIFY_RBAC": {
+      "$ref": "#/$defs/booleanish"
+    },
+    "AZURE_RBAC_CACHE_TTL_MS": {
+      "$ref": "#/$defs/rbacCacheTtl"
+    },
+    "DEPLOYMENTS_ENABLED": {
+      "$ref": "#/$defs/booleanish"
+    },
+    "DEPLOYMENT_PREVIEW_TTL_MS": {
+      "$ref": "#/$defs/previewTtl"
+    },
+    "DEPLOYMENT_MAX_PREVIEW_CHANGES": {
+      "$ref": "#/$defs/previewChanges"
+    },
+    "DEPLOYMENT_MAX_PROPERTY_CHANGES": {
+      "$ref": "#/$defs/propertyChanges"
+    },
+    "DEPLOYMENT_MAX_OPERATIONS": {
+      "$ref": "#/$defs/operations"
+    },
+    "DEPLOYMENT_WHATIF_TIMEOUT_MS": {
+      "$ref": "#/$defs/whatIfTimeout"
+    },
+    "DEPLOYMENT_POLL_INTERVAL_MS": {
+      "$ref": "#/$defs/pollInterval"
+    },
+    "DEPLOYMENT_MAX_CONCURRENT": {
+      "$ref": "#/$defs/concurrency"
+    },
+    "DEPLOYMENT_RECORD_STORE": {
+      "type": "string",
+      "enum": ["memory", "azure-table"]
+    },
+    "DEPLOYMENT_RECORD_TABLE_ENDPOINT": {
+      "type": "string",
+      "format": "uri",
+      "maxLength": 2048
+    },
+    "DEPLOYMENT_RECORD_TABLE_NAME": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9]{2,62}$"
+    },
+    "DEPLOYMENT_LOCK_TABLE_NAME": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9]{2,62}$"
+    },
+    "DEPLOYMENT_LOCK_TTL_MS": {
+      "$ref": "#/$defs/lockTtl"
+    },
+    "BICEP_CLI_PATH": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "BICEP_CLI_SHA256": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "BICEP_COMPILE_TIMEOUT_MS": {
+      "$ref": "#/$defs/compileTimeout"
+    },
+    "BICEP_MAX_OUTPUT_BYTES": {
+      "$ref": "#/$defs/outputBytes"
+    },
+    "BICEP_MAX_CONCURRENCY": {
+      "$ref": "#/$defs/concurrency"
+    },
+    "BICEP_MAX_FILES": {
+      "$ref": "#/$defs/files"
+    },
+    "BICEP_MAX_FILE_BYTES": {
+      "$ref": "#/$defs/fileBytes"
+    },
+    "BICEP_MAX_TOTAL_BYTES": {
+      "$ref": "#/$defs/totalBytes"
+    },
+    "BICEP_MAX_PATH_LENGTH": {
+      "$ref": "#/$defs/pathLength"
+    },
+    "BICEP_MAX_PATH_DEPTH": {
+      "$ref": "#/$defs/pathDepth"
+    },
+    "BICEP_ALLOWED_EXTENSIONS": {
+      "$ref": "#/$defs/csv"
+    },
+    "BICEP_MAX_TEMPLATE_RESOURCES": {
+      "$ref": "#/$defs/templateResources"
+    },
+    "BICEP_MAX_TEMPLATE_BYTES": {
+      "$ref": "#/$defs/totalBytes"
+    },
+    "BICEP_MAX_NESTED_DEPLOYMENTS": {
+      "$ref": "#/$defs/nestedDeployments"
+    },
+    "BICEP_DENIED_RESOURCE_TYPES": {
+      "$ref": "#/$defs/csv"
+    },
+    "BICEP_REMOTE_MODULES_ENABLED": {
+      "$ref": "#/$defs/booleanish"
+    },
+    "BICEP_ALLOWED_REGISTRIES": {
+      "$ref": "#/$defs/csv"
+    }
+  },
+  "required": [
+    "NODE_ENV",
+    "AUTH_MODE",
+    "MUTATIONS_ENABLED",
+    "MUTATION_CONFIRMATION_REQUIRED",
+    "DEPLOYMENTS_ENABLED",
+    "AZURE_VERIFY_RBAC"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "AUTH_MODE": {
+            "const": "entra-jwt"
+          }
+        },
+        "required": ["AUTH_MODE"]
+      },
+      "then": {
+        "properties": {
+          "ENTRA_TENANT_ID": true,
+          "ENTRA_AUDIENCE": true
+        },
+        "required": ["ENTRA_TENANT_ID", "ENTRA_AUDIENCE"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "DEPLOYMENTS_ENABLED": {
+            "$ref": "#/$defs/trueBooleanish"
+          }
+        },
+        "required": ["DEPLOYMENTS_ENABLED"]
+      },
+      "then": {
+        "properties": {
+          "BICEP_CLI_PATH": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "pattern": "\\S"
+          },
+          "REQUEST_TIMEOUT_MS": {
+            "$ref": "#/$defs/zeroTimeout"
+          },
+          "BICEP_CLI_SHA256": true,
+          "AZURE_CLIENT_ID": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "\\S",
+            "description": "Operator identity. Runtime validation requires this to differ from AZURE_DEPLOYMENT_CLIENT_ID."
+          },
+          "AZURE_DEPLOYMENT_CLIENT_ID": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "\\S",
+            "description": "Deployment identity. Runtime validation requires this to differ from AZURE_CLIENT_ID."
+          },
+          "DEPLOYMENT_RECORD_STORE": {
+            "const": "azure-table"
+          },
+          "DEPLOYMENT_RECORD_TABLE_ENDPOINT": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048,
+            "pattern": "\\S"
+          }
+        },
+        "required": [
+          "BICEP_CLI_PATH",
+          "BICEP_CLI_SHA256",
+          "AZURE_CLIENT_ID",
+          "AZURE_DEPLOYMENT_CLIENT_ID",
+          "DEPLOYMENT_RECORD_STORE",
+          "DEPLOYMENT_RECORD_TABLE_ENDPOINT"
+        ],
+        "anyOf": [
+          {
+            "properties": {
+              "AZURE_SUBSCRIPTION_IDS": {
+                "type": "string",
+                "pattern": "[^,\\s]"
+              }
+            },
+            "required": ["AZURE_SUBSCRIPTION_IDS"]
+          },
+          {
+            "properties": {
+              "AZURE_ALLOWED_MANAGEMENT_GROUP_IDS": {
+                "type": "string",
+                "pattern": "[^,\\s]"
+              }
+            },
+            "required": ["AZURE_ALLOWED_MANAGEMENT_GROUP_IDS"]
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "BICEP_REMOTE_MODULES_ENABLED": {
+            "$ref": "#/$defs/trueBooleanish"
+          }
+        },
+        "required": ["BICEP_REMOTE_MODULES_ENABLED"]
+      },
+      "then": {
+        "properties": {
+          "BICEP_ALLOWED_REGISTRIES": {
+            "type": "string",
+            "pattern": "[^,\\s]"
+          }
+        },
+        "required": ["BICEP_ALLOWED_REGISTRIES"]
+      }
+    }
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "booleanish": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee]|1|0|[Yy][Ee][Ss]|[Nn][Oo]|[Oo][Nn]|[Oo][Ff][Ff])$"
+        }
+      ]
+    },
+    "trueBooleanish": {
+      "oneOf": [
+        {
+          "type": "boolean",
+          "const": true
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn])$"
+        }
+      ]
+    },
+    "falseBooleanish": {
+      "oneOf": [
+        {
+          "type": "boolean",
+          "const": false
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[Ff][Aa][Ll][Ss][Ee]|0|[Nn][Oo]|[Oo][Ff][Ff])$"
+        }
+      ]
+    },
+    "port": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[1-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9]{2}|[2-8][0-9]{2}|9[0-9]{2}|1[0-9]{3}|[2-8][0-9]{3}|9[0-9]{3}|1[0-9]{4}|[2-5][0-9]{4}|60[0-9]{3}|6[1-4][0-9]{3}|650[0-9]{2}|65[1-4][0-9]{2}|6550[0-9]|655[1-2][0-9]|6553[0-5])$"
+        }
+      ]
+    },
+    "bodyLimit": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 64000,
+          "maximum": 16777216
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:64[0-9]{3}|6[5-8][0-9]{3}|69[0-9]{3}|[7-8][0-9]{4}|9[0-9]{4}|1[0-9]{5}|[2-8][0-9]{5}|9[0-9]{5}|1[0-9]{6}|[2-8][0-9]{6}|9[0-9]{6}|10[0-9]{6}|1[1-5][0-9]{6}|160[0-9]{5}|16[1-6][0-9]{5}|1670[0-9]{4}|167[1-6][0-9]{4}|16770[0-9]{3}|1677[1-6][0-9]{3}|167770[0-9]{2}|167771[0-9]{2}|1677720[0-9]|1677721[0-6])$"
+        }
+      ]
+    },
+    "rateLimit": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9]{2}|[2-8][0-9]{2}|9[0-9]{2}|1[0-9]{3}|[2-8][0-9]{3}|9[0-9]{3}|1[0-9]{4}|[2-8][0-9]{4}|9[0-9]{4}|1[0-9]{5}|[2-8][0-9]{5}|9[0-9]{5}|1000000)$"
+        }
+      ]
+    },
+    "rateLimitWindow": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 86400000
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:1[0-9]{3}|[2-8][0-9]{3}|9[0-9]{3}|1[0-9]{4}|[2-8][0-9]{4}|9[0-9]{4}|1[0-9]{5}|[2-8][0-9]{5}|9[0-9]{5}|1[0-9]{6}|[2-8][0-9]{6}|9[0-9]{6}|1[0-9]{7}|[2-7][0-9]{7}|80[0-9]{6}|8[1-5][0-9]{6}|860[0-9]{5}|86[1-3][0-9]{5}|86400000)$"
+        }
+      ]
+    },
+    "shutdownGrace": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 120000
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9]{2}|[2-8][0-9]{2}|9[0-9]{2}|1[0-9]{3}|[2-8][0-9]{3}|9[0-9]{3}|1[0-9]{4}|[2-8][0-9]{4}|9[0-9]{4}|10[0-9]{4}|11[0-9]{4}|120000)$"
+        }
+      ]
+    },
+    "requestTimeout": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[0-9]|[1-9][0-9]{1,4}|[1-5][0-9]{5}|600000)$"
+        }
+      ]
+    },
+    "armRequestTimeout": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 600000
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:1[0-9]{3}|[2-8][0-9]{3}|9[0-9]{3}|1[0-9]{4}|[2-8][0-9]{4}|9[0-9]{4}|1[0-9]{5}|[2-5][0-9]{5}|600000)$"
+        }
+      ]
+    },
+    "mutationTimeout": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 1800000
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[1-9][0-9]{4}|[1-9][0-9]{5}|1[0-7][0-9]{5}|1800000)$"
+        }
+      ]
+    },
+    "zeroTimeout": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "const": 0
+        },
+        {
+          "type": "string",
+          "const": "0"
+        }
+      ]
+    },
+    "clockTolerance": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 600
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9]{2}|[2-5][0-9]{2}|600)$"
+        }
+      ]
+    },
+    "rbacCacheTtl": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600000
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9]{2}|[2-8][0-9]{2}|9[0-9]{2}|1[0-9]{3}|[2-8][0-9]{3}|9[0-9]{3}|1[0-9]{4}|[2-8][0-9]{4}|9[0-9]{4}|1[0-9]{5}|[2-8][0-9]{5}|9[0-9]{5}|1[0-9]{6}|2[0-9]{6}|30[0-9]{5}|3[1-5][0-9]{5}|3600000)$"
+        }
+      ]
+    },
+    "previewTtl": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 60000,
+          "maximum": 86400000
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:6[0-9]{4}|[7-8][0-9]{4}|9[0-9]{4}|1[0-9]{5}|[2-8][0-9]{5}|9[0-9]{5}|1[0-9]{6}|[2-8][0-9]{6}|9[0-9]{6}|1[0-9]{7}|[2-7][0-9]{7}|80[0-9]{6}|8[1-5][0-9]{6}|860[0-9]{5}|86[1-3][0-9]{5}|86400000)$"
+        }
+      ]
+    },
+    "previewChanges": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2000
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[1-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9]{2}|[2-8][0-9]{2}|9[0-9]{2}|1[0-9]{3}|2000)$"
+        }
+      ]
+    },
+    "propertyChanges": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[1-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9]{2}|200)$"
+        }
+      ]
+    },
+    "operations": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[1-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9]{2}|[2-4][0-9]{2}|500)$"
+        }
+      ]
+    },
+    "whatIfTimeout": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 900000
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:1[0-9]{4}|[2-8][0-9]{4}|9[0-9]{4}|1[0-9]{5}|[2-8][0-9]{5}|900000)$"
+        }
+      ]
+    },
+    "pollInterval": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 500,
+          "maximum": 60000
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:5[0-9]{2}|[6-8][0-9]{2}|9[0-9]{2}|1[0-9]{3}|[2-8][0-9]{3}|9[0-9]{3}|1[0-9]{4}|[2-5][0-9]{4}|60000)$"
+        }
+      ]
+    },
+    "concurrency": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[1-9]|1[0-6])$"
+        }
+      ]
+    },
+    "lockTtl": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 60000,
+          "maximum": 3600000
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:6[0-9]{4}|[7-8][0-9]{4}|9[0-9]{4}|1[0-9]{5}|[2-8][0-9]{5}|9[0-9]{5}|1[0-9]{6}|2[0-9]{6}|30[0-9]{5}|3[1-5][0-9]{5}|3600000)$"
+        }
+      ]
+    },
+    "compileTimeout": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 5000,
+          "maximum": 600000
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:5[0-9]{3}|[6-8][0-9]{3}|9[0-9]{3}|1[0-9]{4}|[2-8][0-9]{4}|9[0-9]{4}|1[0-9]{5}|[2-5][0-9]{5}|600000)$"
+        }
+      ]
+    },
+    "outputBytes": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 65536,
+          "maximum": 16777216
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:6553[6-9]|655[4-8][0-9]|6559[0-9]|65[6-8][0-9]{2}|659[0-9]{2}|6[6-8][0-9]{3}|69[0-9]{3}|[7-8][0-9]{4}|9[0-9]{4}|1[0-9]{5}|[2-8][0-9]{5}|9[0-9]{5}|1[0-9]{6}|[2-8][0-9]{6}|9[0-9]{6}|10[0-9]{6}|1[1-5][0-9]{6}|160[0-9]{5}|16[1-6][0-9]{5}|1670[0-9]{4}|167[1-6][0-9]{4}|16770[0-9]{3}|1677[1-6][0-9]{3}|167770[0-9]{2}|167771[0-9]{2}|1677720[0-9]|1677721[0-6])$"
+        }
+      ]
+    },
+    "files": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 512
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[1-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9]{2}|[2-4][0-9]{2}|50[0-9]|51[0-2])$"
+        }
+      ]
+    },
+    "fileBytes": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 4194304
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:102[4-9]|10[3-8][0-9]|109[0-9]|1[1-8][0-9]{2}|19[0-9]{2}|[2-8][0-9]{3}|9[0-9]{3}|1[0-9]{4}|[2-8][0-9]{4}|9[0-9]{4}|1[0-9]{5}|[2-8][0-9]{5}|9[0-9]{5}|1[0-9]{6}|[2-3][0-9]{6}|40[0-9]{5}|410[0-9]{4}|41[1-8][0-9]{4}|4190[0-9]{3}|419[1-3][0-9]{3}|41940[0-9]{2}|4194[1-2][0-9]{2}|419430[0-4])$"
+        }
+      ]
+    },
+    "totalBytes": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 8388608
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:102[4-9]|10[3-8][0-9]|109[0-9]|1[1-8][0-9]{2}|19[0-9]{2}|[2-8][0-9]{3}|9[0-9]{3}|1[0-9]{4}|[2-8][0-9]{4}|9[0-9]{4}|1[0-9]{5}|[2-8][0-9]{5}|9[0-9]{5}|1[0-9]{6}|[2-7][0-9]{6}|80[0-9]{5}|8[1-2][0-9]{5}|830[0-9]{4}|83[1-7][0-9]{4}|8380[0-9]{3}|838[1-7][0-9]{3}|83880[0-9]{2}|8388[1-5][0-9]{2}|838860[0-8])$"
+        }
+      ]
+    },
+    "pathLength": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 16,
+          "maximum": 1024
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:1[6-9]|[2-8][0-9]|9[0-9]|1[0-9]{2}|[2-8][0-9]{2}|9[0-9]{2}|100[0-9]|101[0-9]|102[0-4])$"
+        }
+      ]
+    },
+    "pathDepth": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[1-9]|1[0-9]|2[0-9]|3[0-2])$"
+        }
+      ]
+    },
+    "templateResources": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[1-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9]{2}|[2-8][0-9]{2}|9[0-9]{2}|1[0-9]{3}|[2-4][0-9]{3}|5000)$"
+        }
+      ]
+    },
+    "nestedDeployments": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 256
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9]{2}|20[0-9]|2[1-4][0-9]|25[0-6])$"
+        }
+      ]
+    },
+    "csv": {
+      "type": "string",
+      "maxLength": 8192
+    }
+  }
+}

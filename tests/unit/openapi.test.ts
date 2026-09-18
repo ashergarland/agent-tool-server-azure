@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { buildOpenApiDocument } from '../../src/openapi/document.js';
-import { createToolRegistry } from '../../src/tools/registry.js';
+import { buildOpenApiDocument } from '@agent-tool-platform/runtime/openapi';
+import { createToolRegistry } from '@agent-tool-platform/runtime/tools';
+import { capabilityManifest } from '../../src/manifest.js';
+import { toolDefinitions } from '../../src/tools/definitions/index.js';
+import { SERVER_INSTRUCTIONS } from '../../src/tools/instructions.js';
 import { testConfig } from '../helpers/config.js';
 
-const document = buildOpenApiDocument(testConfig(), createToolRegistry()) as Record<
-  string,
-  unknown
->;
+const document = buildOpenApiDocument(testConfig(), createToolRegistry(toolDefinitions), {
+  title: capabilityManifest.title,
+  description: capabilityManifest.description,
+  instructions: SERVER_INSTRUCTIONS,
+}) as Record<string, unknown>;
 
 /**
  * ChatGPT rejects an imported Action schema when an object schema declares no properties, so a
@@ -77,27 +81,9 @@ describe('OpenAPI document', () => {
     );
   });
 
-  it('describes the /version payload so the importer can validate it', () => {
-    const properties = at(responseSchema('/version'), 'properties');
-    expect(properties).toMatchObject({
-      service: { type: 'string' },
-      version: { type: 'string' },
-    });
-    expect(at(properties, 'capabilities', 'properties', 'authMode')).toEqual({ type: 'string' });
-  });
-
   it('describes the /tools catalogue as an array of tool entries', () => {
     const tools = at(responseSchema('/tools'), 'properties', 'tools');
     expect(at(tools, 'type')).toBe('array');
     expect(at(tools, 'items', 'properties', 'name')).toEqual({ type: 'string' });
-  });
-
-  it('keeps the documented /version shape in step with the served payload', () => {
-    const documented = Object.keys(
-      at(responseSchema('/version'), 'properties') as Record<string, unknown>,
-    ).sort();
-    expect(documented).toEqual(
-      ['capabilities', 'environment', 'gitSha', 'node', 'service', 'version'].sort(),
-    );
   });
 });

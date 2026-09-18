@@ -1,4 +1,4 @@
-import { badRequest } from '../errors.js';
+import { badRequest } from '@agent-tool-platform/runtime/errors';
 import { hashJson } from './hash.js';
 
 export type TemplateScopeKind = 'resourceGroup' | 'subscription' | 'managementGroup' | 'tenant';
@@ -98,6 +98,18 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const asString = (value: unknown): string | undefined =>
   typeof value === 'string' && value.length > 0 ? value : undefined;
 
+const scopeLiteral = (value: unknown, field: string, resourceType: string): string | undefined => {
+  if (value === undefined) return undefined;
+  const literal = asString(value);
+  if (!literal || literal.trimStart().startsWith('[')) {
+    throw badRequest(
+      `Resource ${resourceType} uses a computed ${field} that cannot be resolved against the ` +
+        'server allow-lists.',
+    );
+  }
+  return literal;
+};
+
 export const scopeFromSchema = (schema: unknown): TemplateScopeKind => {
   const value = asString(schema)?.toLowerCase();
   if (!value) {
@@ -176,6 +188,7 @@ const walkResources = (
   depth: number,
   limits: InspectionLimits,
   state: WalkState,
+  parentType?: string,
 ): void => {
   if (depth > limits.maxDepth) {
     throw badRequest(
@@ -193,40 +206,63 @@ const walkResources = (
     if (!type) {
       throw badRequest(`Resource ${path}[${index}] has no type and cannot be inspected`);
     }
-    const normalizedType = type.toLowerCase();
+    const firstTypeSegment = type.split('/')[0] ?? '';
+    const qualifiedType =
+      parentType && !firstTypeSegment.includes('.') ? `${parentType}/${type}` : type;
+    const normalizedType = qualifiedType.toLowerCase();
     state.types.add(normalizedType);
 
     if (ALWAYS_DENIED_RESOURCE_TYPES.includes(normalizedType as never)) {
       throw badRequest(
-        `Resource type ${type} executes arbitrary code during deployment and is never permitted.`,
+        `Resource type ${qualifiedType} executes arbitrary code during deployment and is never permitted.`,
       );
     }
     if (limits.deniedResourceTypes.includes(normalizedType)) {
       throw badRequest(
-        `Resource type ${type} is not permitted by this server's deployment policy.`,
+        `Resource type ${qualifiedType} is not permitted by this server's deployment policy.`,
       );
     }
     if (PRIVILEGED_TYPES.has(normalizedType)) {
       state.warnings.push({
         code: 'privileged_resource_type',
         message:
-          `${type} changes authorisation. The deployment identity needs privileged RBAC ` +
+          `${qualifiedType} changes authorisation. The deployment identity needs privileged RBAC ` +
           '(such as Role Based Access Control Administrator) for this to succeed.',
       });
     }
 
-    const subscriptionId = asString(resource['subscriptionId']);
-    const resourceGroup = asString(resource['resourceGroup']);
-    const managementGroupId = asString(resource['managementGroupId']);
-    const scope = asString(resource['scope']);
+    const subscriptionId = scopeLiteral(
+      resource['subscriptionId'],
+      'subscriptionId',
+      qualifiedType,
+    );
+    const resourceGroup = scopeLiteral(resource['resourceGroup'], 'resourceGroup', qualifiedType);
+    const managementGroupId = scopeLiteral(
+      resource['managementGroupId'],
+      'managementGroupId',
+      qualifiedType,
+    );
+    const scope = resource['scope'];
     if (subscriptionId ?? resourceGroup ?? managementGroupId) {
       state.crossScope.push({ subscriptionId, resourceGroup, managementGroupId });
     }
     if (scope !== undefined) {
-      state.warnings.push({
-        code: 'extension_scope',
-        message: `Resource ${type} is deployed at an explicit scope; verify it stays inside the allow-list.`,
-      });
+      throw badRequest(
+        `Resource ${qualifiedType} uses an explicit scope that cannot be resolved against the ` +
+          'server allow-lists. Use a nested deployment with literal subscriptionId, resourceGroup, ' +
+          'or managementGroupId fields instead.',
+      );
+    }
+
+    if (resource['resources'] !== undefined) {
+      walkResources(
+        resource['resources'],
+        `${path}[${index}].resources`,
+        depth + 1,
+        limits,
+        state,
+        qualifiedType,
+      );
     }
 
     if (normalizedType === 'microsoft.resources/deployments') {

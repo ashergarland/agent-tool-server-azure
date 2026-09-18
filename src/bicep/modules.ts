@@ -1,4 +1,4 @@
-import { badRequest } from '../errors.js';
+import { badRequest } from '@agent-tool-platform/runtime/errors';
 import type { NormalizedBundle } from './types.js';
 
 export interface ModulePolicy {
@@ -6,17 +6,11 @@ export interface ModulePolicy {
   readonly remoteModulesEnabled: boolean;
   /** Lower-cased OCI registry hosts that `br:` references may target. */
   readonly allowedRegistries: readonly string[];
-  /** Whether `ts:` Template Spec references are permitted. */
-  readonly templateSpecsEnabled: boolean;
-  /** Subscriptions whose Template Specs may be referenced. */
-  readonly allowedSubscriptionIds: readonly string[];
 }
 
 export const DEFAULT_MODULE_POLICY: ModulePolicy = {
   remoteModulesEnabled: false,
   allowedRegistries: [],
-  templateSpecsEnabled: false,
-  allowedSubscriptionIds: [],
 };
 
 /** `br:host/path:tag`, `br/alias:path:tag`, `ts:sub/rg/name:version`, `ts/alias:name:version`. */
@@ -72,29 +66,11 @@ const assertRegistryAllowed = (reference: RemoteModuleReference, policy: ModuleP
   }
 };
 
-const assertTemplateSpecAllowed = (
-  reference: RemoteModuleReference,
-  policy: ModulePolicy,
-): void => {
-  if (!policy.templateSpecsEnabled) {
-    throw badRequest(
-      `Template Spec references are disabled: ${reference.reference} in ${reference.file}`,
-    );
-  }
-  if (reference.reference.startsWith('ts/')) {
-    throw badRequest(
-      `Template Spec alias references are not supported: ${reference.reference} in ${reference.file}`,
-    );
-  }
-  const subscription = reference.reference.slice('ts:'.length).split('/')[0]?.toLowerCase() ?? '';
-  if (
-    policy.allowedSubscriptionIds.length > 0 &&
-    !policy.allowedSubscriptionIds.includes(subscription)
-  ) {
-    throw badRequest(`Template Spec subscription ${subscription} is outside the allow-list`, {
-      file: reference.file,
-    });
-  }
+const assertTemplateSpecAllowed = (reference: RemoteModuleReference): void => {
+  throw badRequest(
+    `Template Spec references are not supported because their linked template content cannot be ` +
+      `inspected locally: ${reference.reference} in ${reference.file}`,
+  );
 };
 
 /**
@@ -118,7 +94,7 @@ export const assertModuleReferencesAllowed = (
   }
 
   for (const reference of references) {
-    if (reference.scheme === 'ts') assertTemplateSpecAllowed(reference, policy);
+    if (reference.scheme === 'ts') assertTemplateSpecAllowed(reference);
     else assertRegistryAllowed(reference, policy);
   }
   return references;

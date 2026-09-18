@@ -1,13 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from 'pino';
+import { badRequest, notFound } from '@agent-tool-platform/runtime/errors';
 import { DeploymentService } from '../../src/services/deployments.js';
 import { Guardrails } from '../../src/services/guardrails.js';
 import { InMemoryDeploymentRecordStore } from '../../src/deployments/store-memory.js';
+import {
+  DeploymentLeaseLostError,
+  type DeploymentRecordStore,
+} from '../../src/deployments/records.js';
+import { mapAzureError } from '../../src/provider/azure/errors.js';
 import { Metrics } from '../../src/util/metrics.js';
 import { testConfig } from '../helpers/config.js';
 import { createFakeCompiler, RG_TEMPLATE, SUBSCRIPTION_TEMPLATE } from '../helpers/bicep.js';
 import { createFakeProvider, createTestLogger, SUB_A, SUB_B } from '../helpers/fake-provider.js';
-import type { ArmDeploymentStatus, ArmWhatIfResult } from '../../src/provider/types.js';
+import type {
+  ArmDeploymentRequest,
+  ArmDeploymentStatus,
+  ArmWhatIfResult,
+} from '../../src/provider/types.js';
 
 const PRINCIPAL = 'key:abc';
 const OTHER_PRINCIPAL = 'key:def';
@@ -20,6 +30,7 @@ const bundle = {
 const rgScope = { kind: 'resourceGroup' as const, subscriptionId: SUB_A, resourceGroup: 'rg-prod' };
 
 const DEPLOYMENT_ENV = {
+  MUTATIONS_ENABLED: 'true',
   DEPLOYMENTS_ENABLED: 'true',
   BICEP_CLI_PATH: '/opt/bicep/bicep',
   AZURE_SUBSCRIPTION_IDS: SUB_A,
@@ -31,15 +42,52 @@ const whatIfResult = (changes: ArmWhatIfResult['changes'] = []): ArmWhatIfResult
   error: undefined,
 });
 
-const setup = (overrides: Record<string, string> = {}) => {
+interface SetupOptions {
+  readonly store?: DeploymentRecordStore;
+  readonly idPrefix?: string;
+}
+
+class ControlledLeaseStore extends InMemoryDeploymentRecordStore {
+  private lease: AbortController | undefined;
+
+  public loseLease(statusCode: number): void {
+    this.lease?.abort(
+      new DeploymentLeaseLostError(
+        'resourceGroup:/subscriptions/test/resourceGroups/rg-prod',
+        Object.assign(new Error(`table status ${statusCode}`), { statusCode }),
+      ),
+    );
+  }
+
+  public override withScopeLock<T>(
+    scopeKey: string,
+    run: (leaseSignal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return super.withScopeLock(
+      scopeKey,
+      async () => {
+        const lease = new AbortController();
+        this.lease = lease;
+        try {
+          return await run(lease.signal);
+        } finally {
+          this.lease = undefined;
+        }
+      },
+      signal,
+    );
+  }
+}
+
+const setup = (overrides: Record<string, string> = {}, options: SetupOptions = {}) => {
   const config = testConfig({ ...DEPLOYMENT_ENV, ...overrides });
-  const provider = createFakeProvider({
-    whatIfDeployment: vi.fn(() => Promise.resolve(whatIfResult())),
-  });
+  const provider = createFakeProvider();
   const compiler = createFakeCompiler();
-  const store = new InMemoryDeploymentRecordStore();
+  const store = options.store ?? new InMemoryDeploymentRecordStore();
   let clock = Date.parse('2026-01-01T00:00:00.000Z');
   let counter = 0;
+  const logger = createTestLogger();
 
   const service = new DeploymentService({
     provider,
@@ -47,10 +95,10 @@ const setup = (overrides: Record<string, string> = {}) => {
     config,
     store,
     compiler,
-    logger: createTestLogger() as unknown as Logger,
+    logger: logger as unknown as Logger,
     metrics: new Metrics(),
     now: () => new Date(clock),
-    newId: () => `id-${(counter += 1)}`,
+    newId: () => `${options.idPrefix ?? 'id'}-${(counter += 1)}`,
   });
 
   return {
@@ -59,6 +107,7 @@ const setup = (overrides: Record<string, string> = {}) => {
     compiler,
     store,
     service,
+    logger,
     advance: (ms: number) => {
       clock += ms;
     },
@@ -91,13 +140,15 @@ const previewAndDeploy = async (
 
 describe('DeploymentService.validate', () => {
   it('reports the template surface without contacting Azure', async () => {
-    const { service, provider } = setup();
-    const result = await service.validate({ bundle });
+    const { service, provider, compiler } = setup();
+    const signal = new AbortController().signal;
+    const result = await service.validate({ bundle }, signal);
 
     expect(result.valid).toBe(true);
     expect(result.templateScope).toBe('resourceGroup');
     expect(result.resourceTypes).toEqual(['microsoft.storage/storageaccounts']);
     expect(result.secureParameterNames).toEqual(['adminPassword']);
+    expect(compiler.requests[0]?.signal).toBe(signal);
     expect(provider.calls.filter((call) => call.name.startsWith('whatIf'))).toHaveLength(0);
   });
 
@@ -211,6 +262,23 @@ describe('DeploymentService scope enforcement', () => {
     ).rejects.toThrowError(/requires location/);
   });
 
+  it('refuses subscription scope while a resource-group allow-list is active', async () => {
+    const harness = setup({ AZURE_ALLOWED_RESOURCE_GROUPS: 'rg-prod' });
+    harness.compiler.result = { ...harness.compiler.result, template: SUBSCRIPTION_TEMPLATE };
+
+    await expect(
+      harness.service.whatIf(
+        {
+          bundle,
+          parameters: {},
+          scope: { kind: 'subscription', subscriptionId: SUB_A, location: 'westeurope' },
+        },
+        PRINCIPAL,
+        'r',
+      ),
+    ).rejects.toThrowError(/Subscription-scope deployments are disabled/);
+  });
+
   it('refuses a nested deployment that escapes into another subscription', async () => {
     const harness = setup();
     harness.compiler.result = {
@@ -231,6 +299,79 @@ describe('DeploymentService scope enforcement', () => {
     await expect(
       harness.service.whatIf({ bundle, parameters: {}, scope: rgScope }, PRINCIPAL, 'r'),
     ).rejects.toThrowError(/outside the server's allow-list/);
+  });
+
+  it('requires an explicit subscription allow-list for nested targets from a management group', async () => {
+    const harness = setup({
+      AZURE_SUBSCRIPTION_IDS: '',
+      AZURE_ALLOWED_MANAGEMENT_GROUP_IDS: 'mg-root',
+    });
+    harness.compiler.result = {
+      ...harness.compiler.result,
+      template: {
+        ...SUBSCRIPTION_TEMPLATE,
+        $schema:
+          'https://schema.management.azure.com/schemas/2019-08-01/managementGroupDeploymentTemplate.json#',
+        resources: [
+          {
+            type: 'Microsoft.Resources/deployments',
+            apiVersion: '2024-03-01',
+            name: 'escape',
+            subscriptionId: SUB_B,
+            properties: { mode: 'Incremental', template: { resources: [] } },
+          },
+        ],
+      },
+    };
+
+    await expect(
+      harness.service.whatIf(
+        {
+          bundle,
+          parameters: {},
+          scope: { kind: 'managementGroup', managementGroupId: 'mg-root', location: 'westeurope' },
+        },
+        PRINCIPAL,
+        'r',
+      ),
+    ).rejects.toThrowError(/explicit AZURE_SUBSCRIPTION_IDS allow-list/);
+  });
+
+  it('refuses nested subscription scope while a resource-group allow-list is active', async () => {
+    const harness = setup({ AZURE_ALLOWED_RESOURCE_GROUPS: 'rg-prod' });
+    harness.compiler.result = {
+      ...harness.compiler.result,
+      template: {
+        ...RG_TEMPLATE,
+        resources: [
+          {
+            type: 'Microsoft.Resources/deployments',
+            apiVersion: '2024-03-01',
+            name: 'subscription-scope',
+            subscriptionId: SUB_A,
+            properties: {
+              mode: 'Incremental',
+              template: {
+                $schema:
+                  'https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#',
+                resources: [
+                  {
+                    type: 'Microsoft.Resources/resourceGroups',
+                    apiVersion: '2024-03-01',
+                    name: 'outside-allow-list',
+                    location: 'westeurope',
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    await expect(
+      harness.service.whatIf({ bundle, parameters: {}, scope: rgScope }, PRINCIPAL, 'r'),
+    ).rejects.toThrowError(/Nested subscription-scope deployments are disabled/);
   });
 });
 
@@ -355,6 +496,23 @@ describe('DeploymentService.whatIf', () => {
     ).rejects.toThrowError(/Azure rejected the what-if preview/);
   });
 
+  it('propagates request cancellation to compilation and ARM what-if', async () => {
+    const harness = setup();
+    const signal = new AbortController().signal;
+
+    await harness.service.whatIf(
+      { bundle, parameters: {}, scope: rgScope },
+      PRINCIPAL,
+      'req',
+      signal,
+    );
+
+    expect(harness.compiler.requests[0]?.signal).toBe(signal);
+    const request = harness.provider.calls.find((call) => call.name === 'whatIfDeployment')
+      ?.args[0] as { readonly signal?: AbortSignal };
+    expect(request.signal).toBe(signal);
+  });
+
   it('refuses to preview source that does not compile', async () => {
     const harness = setup();
     harness.compiler.result = {
@@ -407,6 +565,401 @@ describe('DeploymentService.deploy', () => {
     });
   });
 
+  it('does not admit a deployment after its request is cancelled', async () => {
+    const harness = setup();
+    const preview = await harness.service.whatIf(
+      { bundle, parameters: {}, scope: rgScope },
+      PRINCIPAL,
+      'preview',
+    );
+    const cancellation = new AbortController();
+    cancellation.abort();
+
+    await expect(
+      harness.service.deploy(
+        {
+          bundle,
+          parameters: {},
+          scope: rgScope,
+          confirmationHash: preview.confirmationHash,
+          confirm: true,
+          reason: 'cancelled request',
+        },
+        PRINCIPAL,
+        'deploy',
+        cancellation.signal,
+      ),
+    ).rejects.toMatchObject({ code: 'timeout' });
+    expect(harness.provider.calls.filter((call) => call.name === 'beginDeployment')).toHaveLength(
+      0,
+    );
+  });
+
+  it('finishes recording and auditing a deployment after it is admitted', async () => {
+    const harness = setup();
+    const preview = await harness.service.whatIf(
+      { bundle, parameters: {}, scope: rgScope },
+      PRINCIPAL,
+      'preview',
+    );
+    const cancellation = new AbortController();
+    const beginDeployment = vi.fn((_request: ArmDeploymentRequest) => {
+      cancellation.abort();
+      return Promise.resolve({
+        id: '/subscriptions/x/providers/Microsoft.Resources/deployments/test',
+        name: 'test',
+        provisioningState: 'Accepted',
+        correlationId: 'correlation',
+        timestamp: undefined,
+        duration: undefined,
+        outputs: undefined,
+        error: undefined,
+      } satisfies ArmDeploymentStatus);
+    });
+    harness.provider.beginDeployment = beginDeployment;
+
+    await expect(
+      harness.service.deploy(
+        {
+          bundle,
+          parameters: {},
+          scope: rgScope,
+          confirmationHash: preview.confirmationHash,
+          confirm: true,
+          reason: 'track accepted deployment',
+        },
+        PRINCIPAL,
+        'deploy',
+        cancellation.signal,
+      ),
+    ).resolves.toMatchObject({ status: 'running' });
+
+    expect(beginDeployment.mock.calls[0]?.[0].signal).toBeInstanceOf(AbortSignal);
+    expect(beginDeployment.mock.calls[0]?.[0].signal).not.toBe(cancellation.signal);
+    await expect(harness.store.get(preview.previewId, PRINCIPAL)).resolves.toMatchObject({
+      status: 'running',
+      armDeploymentName: expect.stringMatching(/^atsa-/),
+    });
+    expect(harness.logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'deployment.submitting' }),
+      expect.any(String),
+    );
+    expect(harness.logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'deployment.started' }),
+      expect.any(String),
+    );
+  });
+
+  it('retains an auditable submitting record when the ARM response is uncertain', async () => {
+    const harness = setup();
+    const preview = await harness.service.whatIf(
+      { bundle, parameters: {}, scope: rgScope },
+      PRINCIPAL,
+      'preview',
+    );
+    harness.provider.beginDeployment = vi.fn(() => Promise.reject(new Error('response lost')));
+
+    await expect(
+      harness.service.deploy(
+        {
+          bundle,
+          parameters: {},
+          scope: rgScope,
+          confirmationHash: preview.confirmationHash,
+          confirm: true,
+          reason: 'track uncertain deployment',
+        },
+        PRINCIPAL,
+        'deploy',
+      ),
+    ).rejects.toThrow(/response lost/);
+
+    await expect(harness.store.get(preview.previewId, PRINCIPAL)).resolves.toMatchObject({
+      status: 'submitting',
+      armDeploymentName: expect.stringMatching(/^atsa-/),
+      reason: 'track uncertain deployment',
+    });
+    expect(harness.logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'deployment.submitting' }),
+      expect.any(String),
+    );
+  });
+
+  it.each([401, 429])(
+    'keeps a Table %i lease failure uncertain and later reconciles provider state',
+    async (statusCode) => {
+      const store = new ControlledLeaseStore();
+      const harness = setup({}, { store });
+      const preview = await harness.service.whatIf(
+        { bundle, parameters: {}, scope: rgScope },
+        PRINCIPAL,
+        'preview',
+      );
+      harness.provider.beginDeployment = vi.fn((request: ArmDeploymentRequest) => {
+        store.loseLease(statusCode);
+        if (!request.signal) throw new Error('expected the lease signal');
+        return Promise.reject(mapAzureError(request.signal.reason, 'begin ARM deployment'));
+      });
+
+      await expect(
+        harness.service.deploy(
+          {
+            bundle,
+            parameters: {},
+            scope: rgScope,
+            confirmationHash: preview.confirmationHash,
+            confirm: true,
+            reason: 'lease loss',
+          },
+          PRINCIPAL,
+          'deploy',
+        ),
+      ).rejects.toMatchObject({ code: 'conflict' });
+
+      await expect(store.get(preview.previewId, PRINCIPAL)).resolves.toMatchObject({
+        status: 'submitting',
+        error: { code: 'submission_uncertain' },
+      });
+
+      harness.provider.getDeployment = vi.fn(() =>
+        Promise.resolve({
+          id: '/subscriptions/x/providers/Microsoft.Resources/deployments/reconciled',
+          name: `atsa-${preview.previewId}`,
+          provisioningState: 'Succeeded',
+          correlationId: 'reconciled',
+          timestamp: undefined,
+          duration: undefined,
+          outputs: undefined,
+          error: undefined,
+        }),
+      );
+      await expect(
+        harness.service.getDeployment({ recordId: preview.previewId }, PRINCIPAL),
+      ).resolves.toMatchObject({ provisioningState: 'Succeeded' });
+      await expect(store.get(preview.previewId, PRINCIPAL)).resolves.toMatchObject({
+        status: 'succeeded',
+      });
+    },
+  );
+
+  it('terminalizes a definitive ARM submission rejection', async () => {
+    const harness = setup();
+    const preview = await harness.service.whatIf(
+      { bundle, parameters: {}, scope: rgScope },
+      PRINCIPAL,
+      'preview',
+    );
+    harness.provider.beginDeployment = vi.fn(() =>
+      Promise.reject(badRequest('ARM rejected the deployment body')),
+    );
+
+    await expect(
+      harness.service.deploy(
+        {
+          bundle,
+          parameters: {},
+          scope: rgScope,
+          confirmationHash: preview.confirmationHash,
+          confirm: true,
+          reason: 'invalid deployment',
+        },
+        PRINCIPAL,
+        'deploy',
+      ),
+    ).rejects.toMatchObject({ code: 'bad_request' });
+
+    await expect(harness.store.get(preview.previewId, PRINCIPAL)).resolves.toMatchObject({
+      status: 'failed',
+      error: {
+        code: 'bad_request',
+        message: 'ARM rejected the deployment body',
+      },
+    });
+  });
+
+  it('reconciles and safely retries an uncertain submission by deterministic name', async () => {
+    const harness = setup();
+    const preview = await harness.service.whatIf(
+      { bundle, parameters: {}, scope: rgScope },
+      PRINCIPAL,
+      'preview',
+    );
+    const accepted: ArmDeploymentStatus = {
+      id: '/subscriptions/x/providers/Microsoft.Resources/deployments/retried',
+      name: `atsa-${preview.previewId}`,
+      provisioningState: 'Accepted',
+      correlationId: 'retry-correlation',
+      timestamp: undefined,
+      duration: undefined,
+      outputs: undefined,
+      error: undefined,
+    };
+    const beginDeployment = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('response lost'))
+      .mockResolvedValueOnce(accepted);
+    harness.provider.beginDeployment = beginDeployment;
+    harness.provider.getDeployment = vi.fn(() =>
+      Promise.reject(notFound('deployment is not visible')),
+    );
+    const input = {
+      bundle,
+      parameters: {},
+      scope: rgScope,
+      confirmationHash: preview.confirmationHash,
+      confirm: true,
+      reason: 'retry uncertain submission',
+    };
+
+    await expect(harness.service.deploy(input, PRINCIPAL, 'first')).rejects.toThrow(
+      /response lost/,
+    );
+    await expect(
+      harness.service.getDeployment({ recordId: preview.previewId }, PRINCIPAL),
+    ).rejects.toThrow(/Retry azure_deploy_bicep with the exact approved source/);
+    await expect(harness.service.deploy(input, PRINCIPAL, 'retry')).resolves.toMatchObject({
+      deploymentName: `atsa-${preview.previewId}`,
+      status: 'running',
+      alreadyStarted: false,
+    });
+    expect(beginDeployment).toHaveBeenCalledTimes(2);
+  });
+
+  it('continues from the durable admission point when cancellation follows the submitting write', async () => {
+    const harness = setup();
+    const preview = await harness.service.whatIf(
+      { bundle, parameters: {}, scope: rgScope },
+      PRINCIPAL,
+      'preview',
+    );
+    const cancellation = new AbortController();
+    const patch = harness.store.patch.bind(harness.store);
+    vi.spyOn(harness.store, 'patch').mockImplementation(
+      async (id, principal, recordPatch, signal) => {
+        const updated = await patch(id, principal, recordPatch, signal);
+        if (recordPatch.status === 'submitting') cancellation.abort();
+        return updated;
+      },
+    );
+
+    await expect(
+      harness.service.deploy(
+        {
+          bundle,
+          parameters: {},
+          scope: rgScope,
+          confirmationHash: preview.confirmationHash,
+          confirm: true,
+          reason: 'durable admission',
+        },
+        PRINCIPAL,
+        'deploy',
+        cancellation.signal,
+      ),
+    ).resolves.toMatchObject({ status: 'running' });
+    expect(harness.provider.calls.filter((call) => call.name === 'beginDeployment')).toHaveLength(
+      1,
+    );
+  });
+
+  it('rechecks record state under the scope lock before a delayed retry submits', async () => {
+    const harness = setup();
+    const preview = await harness.service.whatIf(
+      { bundle, parameters: {}, scope: rgScope },
+      PRINCIPAL,
+      'preview',
+    );
+    const compile = harness.compiler.compile.bind(harness.compiler);
+    let compileCount = 0;
+    let markSecondCompile = (): void => undefined;
+    const secondCompileStarted = new Promise<void>((resolve) => {
+      markSecondCompile = resolve;
+    });
+    let releaseSecondCompile = (): void => undefined;
+    const secondCompileRelease = new Promise<void>((resolve) => {
+      releaseSecondCompile = resolve;
+    });
+    harness.compiler.compile = async (request) => {
+      compileCount += 1;
+      if (compileCount === 2) {
+        markSecondCompile();
+        await secondCompileRelease;
+      }
+      return compile(request);
+    };
+    const input = {
+      bundle,
+      parameters: {},
+      scope: rgScope,
+      confirmationHash: preview.confirmationHash,
+      confirm: true,
+      reason: 'idempotent retry',
+    };
+
+    const first = harness.service.deploy(input, PRINCIPAL, 'first');
+    const second = harness.service.deploy(input, PRINCIPAL, 'second');
+    await secondCompileStarted;
+    await expect(first).resolves.toMatchObject({ alreadyStarted: false });
+    releaseSecondCompile();
+    await expect(second).resolves.toMatchObject({ alreadyStarted: true });
+    expect(harness.provider.calls.filter((call) => call.name === 'beginDeployment')).toHaveLength(
+      1,
+    );
+  });
+
+  it('does not regress a terminal status when deployment acceptance finishes late', async () => {
+    const harness = setup();
+    const preview = await harness.service.whatIf(
+      { bundle, parameters: {}, scope: rgScope },
+      PRINCIPAL,
+      'preview',
+    );
+    let markSubmission = (): void => undefined;
+    const submissionStarted = new Promise<void>((resolve) => {
+      markSubmission = resolve;
+    });
+    let releaseSubmission = (): void => undefined;
+    harness.provider.beginDeployment = vi.fn(
+      () =>
+        new Promise<ArmDeploymentStatus>((resolve) => {
+          markSubmission();
+          releaseSubmission = () =>
+            resolve({
+              id: '/subscriptions/x/providers/Microsoft.Resources/deployments/test',
+              name: `atsa-${preview.previewId}`,
+              provisioningState: 'Accepted',
+              correlationId: 'accepted-late',
+              timestamp: undefined,
+              duration: undefined,
+              outputs: undefined,
+              error: undefined,
+            });
+        }),
+    );
+    const deploying = harness.service.deploy(
+      {
+        bundle,
+        parameters: {},
+        scope: rgScope,
+        confirmationHash: preview.confirmationHash,
+        confirm: true,
+        reason: 'race status reconciliation',
+      },
+      PRINCIPAL,
+      'deploy',
+    );
+    await submissionStarted;
+
+    await expect(
+      harness.service.getDeployment({ recordId: preview.previewId }, PRINCIPAL),
+    ).resolves.toMatchObject({ provisioningState: 'Succeeded' });
+    releaseSubmission();
+    await expect(deploying).resolves.toMatchObject({ status: 'succeeded' });
+    await expect(harness.store.get(preview.previewId, PRINCIPAL)).resolves.toMatchObject({
+      status: 'succeeded',
+    });
+  });
+
   it('refuses without confirm=true', async () => {
     const harness = setup();
     const preview = await harness.service.whatIf(
@@ -427,7 +980,7 @@ describe('DeploymentService.deploy', () => {
         PRINCIPAL,
         'r',
       ),
-    ).rejects.toThrowError(/requires confirm=true/);
+    ).rejects.toThrowError(/requires an explicit confirm=true/);
   });
 
   it('refuses without a reason', async () => {
@@ -701,6 +1254,18 @@ describe('DeploymentService.getDeployment', () => {
       /Supply either recordId/,
     );
   });
+
+  it('rejects a record whose persisted scope no longer matches its scope key', async () => {
+    const harness = setup();
+    const { result } = await previewAndDeploy(harness);
+    const record = await harness.store.get(result.recordId, PRINCIPAL);
+    if (!record) throw new Error('expected a deployment record');
+    await harness.store.put({ ...record, scopeKey: 'resourceGroup:tampered' });
+
+    await expect(
+      harness.service.getDeployment({ recordId: result.recordId }, PRINCIPAL),
+    ).rejects.toThrowError(/contains an inconsistent scope/);
+  });
 });
 
 describe('DeploymentService.rollback', () => {
@@ -736,6 +1301,260 @@ describe('DeploymentService.rollback', () => {
       'r',
     );
     expect(applied.phase).toBe('deployed');
+  });
+
+  it('reapplies a narrowed scope policy to reads, preview, and confirmed rollback', async () => {
+    const store = new InMemoryDeploymentRecordStore();
+    const original = setup({}, { store });
+    const recordId = await succeed(original);
+    const preview = await original.service.rollback(
+      { recordId, confirm: false, reason: 'revert' },
+      PRINCIPAL,
+      'preview',
+    );
+    if (preview.phase !== 'preview') throw new Error('expected a preview');
+
+    const narrowed = setup(
+      { AZURE_ALLOWED_RESOURCE_GROUPS: 'rg-other' },
+      { store, idPrefix: 'narrowed' },
+    );
+    await expect(narrowed.service.getDeployment({ recordId }, PRINCIPAL)).rejects.toThrowError(
+      /outside the server's allow-list/,
+    );
+    await expect(
+      narrowed.service.listOperations({ recordId, limit: 10 }, PRINCIPAL),
+    ).rejects.toThrowError(/outside the server's allow-list/);
+    await expect(
+      narrowed.service.rollback(
+        { recordId, confirm: false, reason: 'revert' },
+        PRINCIPAL,
+        'preview',
+      ),
+    ).rejects.toThrowError(/outside the server's allow-list/);
+    await expect(
+      narrowed.service.rollback(
+        {
+          recordId,
+          confirm: true,
+          confirmationHash: preview.preview.confirmationHash,
+          reason: 'revert',
+        },
+        PRINCIPAL,
+        'deploy',
+      ),
+    ).rejects.toThrowError(/outside the server's allow-list/);
+    expect(narrowed.provider.calls.filter((call) => call.name === 'beginDeployment')).toHaveLength(
+      0,
+    );
+  });
+
+  it('reinspects stored templates under a newly denied resource policy', async () => {
+    const store = new InMemoryDeploymentRecordStore();
+    const original = setup({}, { store });
+    const recordId = await succeed(original);
+    const preview = await original.service.rollback(
+      { recordId, confirm: false, reason: 'revert' },
+      PRINCIPAL,
+      'preview',
+    );
+    if (preview.phase !== 'preview') throw new Error('expected a preview');
+
+    const narrowed = setup(
+      { BICEP_DENIED_RESOURCE_TYPES: 'microsoft.storage/storageaccounts' },
+      { store, idPrefix: 'denied' },
+    );
+    await expect(
+      narrowed.service.rollback(
+        { recordId, confirm: false, reason: 'revert' },
+        PRINCIPAL,
+        'preview',
+      ),
+    ).rejects.toThrowError(/not permitted by this server's deployment policy/);
+    await expect(
+      narrowed.service.rollback(
+        {
+          recordId,
+          confirm: true,
+          confirmationHash: preview.preview.confirmationHash,
+          reason: 'revert',
+        },
+        PRINCIPAL,
+        'deploy',
+      ),
+    ).rejects.toThrowError(/not permitted by this server's deployment policy/);
+  });
+
+  it('rejects a stored rollback target whose template no longer matches its hash', async () => {
+    const harness = setup();
+    const recordId = await succeed(harness);
+    const record = await harness.store.get(recordId, PRINCIPAL);
+    if (!record) throw new Error('expected a deployment record');
+    await harness.store.put({
+      ...record,
+      template: { ...RG_TEMPLATE, resources: [] },
+    });
+
+    await expect(
+      harness.service.rollback(
+        { recordId, confirm: false, reason: 'revert' },
+        PRINCIPAL,
+        'preview',
+      ),
+    ).rejects.toThrowError(/contains an inconsistent template/);
+  });
+
+  it('rejects a confirmed rollback preview that diverges from its target record', async () => {
+    const harness = setup();
+    const recordId = await succeed(harness);
+    const preview = await harness.service.rollback(
+      { recordId, confirm: false, reason: 'revert' },
+      PRINCIPAL,
+      'preview',
+    );
+    if (preview.phase !== 'preview') throw new Error('expected a preview');
+    const previewRecord = await harness.store.get(preview.preview.previewId, PRINCIPAL);
+    if (!previewRecord) throw new Error('expected a rollback preview record');
+    await harness.store.put({ ...previewRecord, templateHash: 'diverged-template' });
+
+    await expect(
+      harness.service.rollback(
+        {
+          recordId,
+          confirm: true,
+          confirmationHash: preview.preview.confirmationHash,
+          reason: 'revert',
+        },
+        PRINCIPAL,
+        'deploy',
+      ),
+    ).rejects.toThrowError(/no longer matches the currently authorized deployment record/);
+    expect(harness.provider.calls.filter((call) => call.name === 'beginDeployment')).toHaveLength(
+      1,
+    );
+  });
+
+  it('reapplies narrowed cross-scope policy to stored rollback templates', async () => {
+    const store = new InMemoryDeploymentRecordStore();
+    const original = setup({ AZURE_SUBSCRIPTION_IDS: `${SUB_A},${SUB_B}` }, { store });
+    original.compiler.result = {
+      ...original.compiler.result,
+      template: {
+        ...RG_TEMPLATE,
+        resources: [
+          {
+            type: 'Microsoft.Resources/deployments',
+            apiVersion: '2024-03-01',
+            name: 'cross-subscription',
+            subscriptionId: SUB_B,
+            properties: { mode: 'Incremental', template: { resources: [] } },
+          },
+        ],
+      },
+    };
+    const recordId = await succeed(original);
+    const preview = await original.service.rollback(
+      { recordId, confirm: false, reason: 'revert' },
+      PRINCIPAL,
+      'preview',
+    );
+    if (preview.phase !== 'preview') throw new Error('expected a preview');
+
+    const narrowed = setup({}, { store, idPrefix: 'cross-scope' });
+    await expect(
+      narrowed.service.rollback(
+        { recordId, confirm: false, reason: 'revert' },
+        PRINCIPAL,
+        'preview',
+      ),
+    ).rejects.toThrowError(/outside the server's allow-list/);
+    await expect(
+      narrowed.service.rollback(
+        {
+          recordId,
+          confirm: true,
+          confirmationHash: preview.preview.confirmationHash,
+          reason: 'revert',
+        },
+        PRINCIPAL,
+        'deploy',
+      ),
+    ).rejects.toThrowError(/outside the server's allow-list/);
+  });
+
+  it('keeps rollback available when current policy explicitly broadens the stored scope', async () => {
+    const store = new InMemoryDeploymentRecordStore();
+    const original = setup({}, { store });
+    const recordId = await succeed(original);
+    const broadened = setup(
+      { AZURE_SUBSCRIPTION_IDS: `${SUB_A},${SUB_B}` },
+      { store, idPrefix: 'broadened' },
+    );
+
+    const preview = await broadened.service.rollback(
+      { recordId, confirm: false, reason: 'revert' },
+      PRINCIPAL,
+      'preview',
+    );
+    if (preview.phase !== 'preview') throw new Error('expected a preview');
+    await expect(
+      broadened.service.rollback(
+        {
+          recordId,
+          confirm: true,
+          confirmationHash: preview.preview.confirmationHash,
+          reason: 'revert',
+        },
+        PRINCIPAL,
+        'deploy',
+      ),
+    ).resolves.toMatchObject({ phase: 'deployed' });
+  });
+
+  it('reconciles and retries an uncertain rollback using its deterministic name', async () => {
+    const harness = setup();
+    const recordId = await succeed(harness);
+    const preview = await harness.service.rollback(
+      { recordId, confirm: false, reason: 'revert' },
+      PRINCIPAL,
+      'preview',
+    );
+    if (preview.phase !== 'preview') throw new Error('expected a preview');
+    const accepted: ArmDeploymentStatus = {
+      id: '/subscriptions/x/providers/Microsoft.Resources/deployments/rollback',
+      name: `atsa-${preview.preview.previewId}`,
+      provisioningState: 'Accepted',
+      correlationId: 'rollback-retry',
+      timestamp: undefined,
+      duration: undefined,
+      outputs: undefined,
+      error: undefined,
+    };
+    const beginDeployment = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('rollback response lost'))
+      .mockResolvedValueOnce(accepted);
+    harness.provider.beginDeployment = beginDeployment;
+    harness.provider.getDeployment = vi.fn(() =>
+      Promise.reject(notFound('rollback deployment is not visible')),
+    );
+    const input = {
+      recordId,
+      confirm: true,
+      confirmationHash: preview.preview.confirmationHash,
+      reason: 'revert',
+    };
+
+    await expect(harness.service.rollback(input, PRINCIPAL, 'first')).rejects.toThrow(
+      /rollback response lost/,
+    );
+    await expect(harness.service.rollback(input, PRINCIPAL, 'retry')).resolves.toMatchObject({
+      phase: 'deployed',
+      result: {
+        deploymentName: `atsa-${preview.preview.previewId}`,
+        status: 'running',
+      },
+    });
+    expect(beginDeployment).toHaveBeenCalledTimes(2);
   });
 
   it('refuses a confirmation hash from a different record', async () => {

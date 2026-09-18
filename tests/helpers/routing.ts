@@ -1,4 +1,4 @@
-import type { RegisteredTool } from '../../src/tools/registry.js';
+import type { RegisteredTool } from '@agent-tool-platform/runtime/tools';
 
 const STOPWORDS = new Set([
   'a',
@@ -68,7 +68,10 @@ export interface RoutingScore {
  * task, or when a sibling tool's `doNotUseWhen` stops steering away from it. That is exactly the
  * property that makes descriptions useful to a real model, and it is checkable without one.
  */
-export const scoreTools = (query: string, tools: readonly RegisteredTool[]): RoutingScore[] => {
+export const scoreTools = (
+  query: string,
+  tools: readonly RegisteredTool<unknown>[],
+): RoutingScore[] => {
   const tokens = tokenize(query);
 
   return tools
@@ -82,8 +85,11 @@ export const scoreTools = (query: string, tools: readonly RegisteredTool[]): Rou
     .sort((a, b) => b.score - a.score || (a.name < b.name ? -1 : 1));
 };
 
-export const topTool = (query: string, tools: readonly RegisteredTool[]): string =>
+export const topTool = (query: string, tools: readonly RegisteredTool<unknown>[]): string =>
   scoreTools(query, tools)[0]?.name ?? '';
 
-export const rankOf = (name: string, query: string, tools: readonly RegisteredTool[]): number =>
-  scoreTools(query, tools).findIndex((entry) => entry.name === name);
+export const rankOf = (
+  name: string,
+  query: string,
+  tools: readonly RegisteredTool<unknown>[],
+): number => scoreTools(query, tools).findIndex((entry) => entry.name === name);

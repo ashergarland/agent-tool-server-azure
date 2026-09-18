@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:io:github.ashergarland:agent-tool-server-azure:hosted-mutating-configuration:v1",
+  "title": "Azure Agent Tool Server hosted mutating configuration",
+  "description": "The bounded hosted configuration with Platform mutation execution and confirmation enabled.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "urn:io:github.ashergarland:agent-tool-server-azure:hosted-configuration:v1"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "AUTH_MODE": {
+          "const": "api-key"
+        },
+        "MUTATIONS_ENABLED": {
+          "$ref": "#/$defs/trueBooleanish"
+        },
+        "MUTATION_CONFIRMATION_REQUIRED": {
+          "$ref": "#/$defs/trueBooleanish"
+        },
+        "TRUST_PROXY": {
+          "$ref": "#/$defs/falseTrustProxy"
+        }
+      },
+      "required": ["MUTATIONS_ENABLED", "MUTATION_CONFIRMATION_REQUIRED"]
+    }
+  ],
+  "unevaluatedProperties": false,
+  "$defs": {
+    "trueBooleanish": {
+      "oneOf": [
+        {
+          "type": "boolean",
+          "const": true
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:[Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn])$"
+        }
+      ]
+    },
+    "falseTrustProxy": {
+      "oneOf": [
+        {
+          "type": "boolean",
+          "const": false
+        },
+        {
+          "type": "integer",
+          "const": 0
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:0|[Ff][Aa][Ll][Ss][Ee]|[Nn][Oo]|[Oo][Ff][Ff])$"
+        }
+      ]
+    }
+  }
+}

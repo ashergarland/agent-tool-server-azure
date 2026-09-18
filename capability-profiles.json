@@ -1,0 +1,189 @@
+{
+  "contractVersion": 1,
+  "kind": "capability-profile-declaration",
+  "capability": {
+    "id": "io.github.ashergarland/agent-tool-server-azure",
+    "displayName": "Azure Agent Tool Server",
+    "repository": "https://github.com/ashergarland/agent-tool-server-azure"
+  },
+  "profiles": [
+    {
+      "id": "hosted-read-only",
+      "description": "Authenticated hosted inspection and diagnosis through an operator-scoped Azure identity.",
+      "dimensions": {
+        "execution": "hosted",
+        "delivery": "container",
+        "access": "authenticated-service",
+        "workload": "provider",
+        "provider": "external",
+        "mutation": "read-only"
+      },
+      "delivery": {
+        "supportedForms": ["container"],
+        "publication": {
+          "kind": "container",
+          "identifier": "ghcr.io/ashergarland/agent-tool-server-azure"
+        },
+        "entrypoint": {
+          "reference": "dist/index.js",
+          "interface": "http"
+        },
+        "mechanics": [
+          {
+            "id": "azure-container-apps",
+            "reference": "docs/deployment.md#first-deployment"
+          }
+        ],
+        "provenance": {
+          "method": "build-recipe",
+          "reference": "Dockerfile"
+        }
+      },
+      "configuration": {
+        "schema": {
+          "id": "urn:io:github.ashergarland:agent-tool-server-azure:hosted-read-only-configuration:v1",
+          "capabilityId": "io.github.ashergarland/agent-tool-server-azure",
+          "path": "schemas/hosted-read-only-configuration.schema.json"
+        },
+        "bounded": true
+      },
+      "requiredSecrets": ["connector-api-key"],
+      "providerPrerequisites": [
+        {
+          "id": "azure-resource-manager",
+          "description": "Azure Resource Manager and Resource Graph are available to the selected managed identity."
+        },
+        {
+          "id": "azure-provider-registrations",
+          "description": "Resource providers needed by the resources being inspected are registered by the operator."
+        }
+      ],
+      "identity": {
+        "trustBoundary": "An authenticated caller reaches a hosted service whose operator-managed Azure identity is the only source of provider credentials.",
+        "rbac": [
+          "Reader-equivalent ARM and Resource Graph access is granted only at operator-selected Azure scopes.",
+          "Effective-permission queries are allowed when AZURE_VERIFY_RBAC is enabled."
+        ]
+      },
+      "workload": {
+        "interface": {
+          "kind": "provider",
+          "reference": "README.md#how-it-works"
+        },
+        "authorization": {
+          "scope": "Provider requests are constrained by the operator allow-list and the managed identity's effective Azure RBAC."
+        },
+        "lifecycle": {
+          "mode": "persistent",
+          "freshness": "Azure reads query the provider for each operation; bounded RBAC results may be cached for the configured TTL.",
+          "cleanup": "Provider clients and in-memory RBAC cache state end with the capability process."
+        },
+        "notReady": {
+          "whenAbsent": "not-ready",
+          "reason": "Readiness is not established until Azure authentication, a read-only provider query, and configured RBAC checks succeed."
+        }
+      },
+      "extensionSchemas": [],
+      "verification": {
+        "surfaces": ["identity", "readiness", "version", "behavior", "provider", "provenance"]
+      }
+    },
+    {
+      "id": "hosted-mutating",
+      "description": "Authenticated hosted Azure operations with separately enabled mutations, previews, confirmation, scoped RBAC, and provider verification.",
+      "dimensions": {
+        "execution": "hosted",
+        "delivery": "container",
+        "access": "authenticated-service",
+        "workload": "provider",
+        "provider": "external",
+        "mutation": "mutating"
+      },
+      "delivery": {
+        "supportedForms": ["container"],
+        "publication": {
+          "kind": "container",
+          "identifier": "ghcr.io/ashergarland/agent-tool-server-azure"
+        },
+        "entrypoint": {
+          "reference": "dist/index.js",
+          "interface": "http"
+        },
+        "mechanics": [
+          {
+            "id": "azure-container-apps",
+            "reference": "docs/deployment.md#first-deployment"
+          },
+          {
+            "id": "guarded-operations",
+            "reference": "docs/deployment.md#enabling-guarded-operations"
+          },
+          {
+            "id": "bicep-deployment",
+            "reference": "docs/deployment.md#enabling-generic-bicep-deployment"
+          }
+        ],
+        "provenance": {
+          "method": "build-recipe",
+          "reference": "Dockerfile"
+        }
+      },
+      "configuration": {
+        "schema": {
+          "id": "urn:io:github.ashergarland:agent-tool-server-azure:hosted-mutating-configuration:v1",
+          "capabilityId": "io.github.ashergarland/agent-tool-server-azure",
+          "path": "schemas/hosted-mutating-configuration.schema.json"
+        },
+        "bounded": true
+      },
+      "requiredSecrets": ["connector-api-key"],
+      "providerPrerequisites": [
+        {
+          "id": "azure-resource-manager",
+          "description": "Azure Resource Manager and Resource Graph are available to the selected managed identity."
+        },
+        {
+          "id": "azure-provider-registrations",
+          "description": "Every resource provider required by an authorized operation or Bicep template is registered by the operator."
+        }
+      ],
+      "identity": {
+        "trustBoundary": "An authenticated caller reaches a hosted service; operator and optional deployment managed identities remain operator-owned and are the only source of Azure credentials.",
+        "rbac": [
+          "Reader-equivalent access plus only the explicitly enabled restart, start, or tag actions is granted at operator-selected scopes.",
+          "When generic Bicep deployment is enabled, a separate deployment identity receives template-specific write access at an allow-listed scope.",
+          "Role-assignment deployment requires separately granted privileged RBAC and is never implied by provider access."
+        ]
+      },
+      "workload": {
+        "interface": {
+          "kind": "provider",
+          "reference": "README.md#how-it-works"
+        },
+        "authorization": {
+          "scope": "Provider requests are constrained by operator allow-lists, distinct operation and deployment identities, and effective Azure RBAC."
+        },
+        "lifecycle": {
+          "mode": "persistent",
+          "freshness": "What-if and provider reads are authoritative at request time; confirmation hashes expire and RBAC results use a bounded TTL.",
+          "cleanup": "Temporary Bicep workspaces are removed after compilation and deployment locks expire or are released."
+        },
+        "notReady": {
+          "whenAbsent": "not-ready",
+          "reason": "Readiness fails when provider authentication, selected mutation RBAC, deployment RBAC, compiler, or durable deployment store requirements are unusable."
+        }
+      },
+      "mutation": {
+        "enablement": "separate",
+        "authorization": "MUTATIONS_ENABLED is off by default; Azure allow-lists and effective RBAC independently constrain every consequential operation, and DEPLOYMENTS_ENABLED separately gates Bicep execution.",
+        "confirmation": "Constrained operations support dry-run and require explicit confirmation; Bicep execution additionally requires a fresh matching what-if confirmation hash and a reason.",
+        "durableRecord": "not-required",
+        "authoritativeVerification": "Verify constrained operations by reading the affected ARM resource and Bicep operations through Azure deployment status and operation APIs; production Bicep execution independently requires durable Azure Table records."
+      },
+      "extensionSchemas": [],
+      "verification": {
+        "surfaces": ["identity", "readiness", "version", "behavior", "provider", "provenance"]
+      }
+    }
+  ]
+}

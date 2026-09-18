@@ -1,6 +1,6 @@
 import type { ActivityLogEntry, AzureProvider, MetricSeries } from '../provider/types.js';
 import { escapeKqlString, subscriptionIdFromResourceId } from '../provider/azure/index.js';
-import { badRequest } from '../errors.js';
+import { badRequest, timedOut } from '@agent-tool-platform/runtime/errors';
 import type { Guardrails } from './guardrails.js';
 
 export interface ActivityLogInput {
@@ -32,6 +32,10 @@ export interface HealthEvent {
   readonly reportedTime: string | undefined;
 }
 
+const assertNotCancelled = (signal: AbortSignal | undefined): void => {
+  if (signal?.aborted) throw timedOut('The request was cancelled');
+};
+
 /**
  * Diagnostic reads: "what changed?", "how is it behaving?", "is it healthy?".
  */
@@ -42,7 +46,11 @@ export class DiagnosticsService {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  public async getActivityLog(input: ActivityLogInput): Promise<readonly ActivityLogEntry[]> {
+  public async getActivityLog(
+    input: ActivityLogInput,
+    signal?: AbortSignal,
+  ): Promise<readonly ActivityLogEntry[]> {
+    assertNotCancelled(signal);
     this.guardrails.assertSubscriptionAllowed(input.subscriptionId);
     if (input.resourceGroup) this.guardrails.assertResourceGroupAllowed(input.resourceGroup);
     if (input.resourceId) this.guardrails.assertResourceIdInScope(input.resourceId);
@@ -50,17 +58,21 @@ export class DiagnosticsService {
     const until = this.now();
     const since = new Date(until.getTime() - input.lookbackHours * 3_600_000);
 
-    return this.provider.listActivityLog({
+    const events = await this.provider.listActivityLog({
       subscriptionId: input.subscriptionId,
       since,
       until,
       ...(input.resourceGroup ? { resourceGroup: input.resourceGroup } : {}),
       ...(input.resourceId ? { resourceId: input.resourceId } : {}),
       top: input.limit,
+      ...(signal === undefined ? {} : { signal }),
     });
+    assertNotCancelled(signal);
+    return events;
   }
 
-  public async getMetrics(input: MetricsInput): Promise<MetricsResult> {
+  public async getMetrics(input: MetricsInput, signal?: AbortSignal): Promise<MetricsResult> {
+    assertNotCancelled(signal);
     this.guardrails.assertResourceIdInScope(input.resourceId);
     if (input.metricNames.length === 0) {
       throw badRequest('At least one metric name is required');
@@ -76,7 +88,9 @@ export class DiagnosticsService {
       until,
       intervalIso8601: input.intervalIso8601,
       aggregation: input.aggregation,
+      ...(signal === undefined ? {} : { signal }),
     });
+    assertNotCancelled(signal);
 
     return {
       resourceId: input.resourceId,
@@ -89,11 +103,15 @@ export class DiagnosticsService {
    * Resource Health snapshot from the Resource Graph `healthresources` table. Returns only
    * resources that Azure currently reports as anything other than Available.
    */
-  public async getUnhealthyResources(input: {
-    readonly subscriptionIds: readonly string[];
-    readonly resourceGroup?: string | undefined;
-    readonly limit: number;
-  }): Promise<readonly HealthEvent[]> {
+  public async getUnhealthyResources(
+    input: {
+      readonly subscriptionIds: readonly string[];
+      readonly resourceGroup?: string | undefined;
+      readonly limit: number;
+    },
+    signal?: AbortSignal,
+  ): Promise<readonly HealthEvent[]> {
+    assertNotCancelled(signal);
     const scope = this.guardrails.resolveSubscriptionScope(input.subscriptionIds);
     if (input.resourceGroup) this.guardrails.assertResourceGroupAllowed(input.resourceGroup);
 
@@ -117,7 +135,9 @@ export class DiagnosticsService {
       subscriptionIds: scope,
       query: clauses.join(' '),
       top: input.limit,
+      ...(signal === undefined ? {} : { signal }),
     });
+    assertNotCancelled(signal);
 
     return page.rows.map((row) => ({
       resourceId: typeof row['targetResourceId'] === 'string' ? row['targetResourceId'] : '',

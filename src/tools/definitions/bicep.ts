@@ -159,7 +159,7 @@ export const validateBicepTool = defineTool({
       'You need to know the effect on existing Azure resources — use azure_what_if_bicep.',
       'You want to apply the template — use azure_what_if_bicep and then azure_deploy_bicep.',
     ],
-    requiredScope: 'None. This tool never contacts Azure.',
+    scope: 'None. This tool never contacts Azure.',
     changesState: false,
     nextSteps: ['azure_what_if_bicep'],
   },
@@ -178,8 +178,8 @@ export const validateBicepTool = defineTool({
     outputNames: z.array(z.string()),
     warnings: z.array(warningSchema),
   }),
-  handler: async (input, services) => {
-    const result = await services.deployments.validate({ bundle: input.bundle });
+  handler: async (input, services, context) => {
+    const result = await services.deployments.validate({ bundle: input.bundle }, context.signal);
     return {
       valid: result.valid,
       diagnostics: [...result.diagnostics],
@@ -222,7 +222,7 @@ export const whatIfBicepTool = defineTool({
       'The template has not compiled yet — run azure_validate_bicep first to get clean diagnostics.',
       'You only want to inspect current state — use azure_search_resources or azure_get_resource.',
     ],
-    requiredScope:
+    scope:
       'The deployment identity needs read access at the target scope, which must be inside the ' +
       'configured deployment allow-list.',
     changesState: false,
@@ -237,8 +237,9 @@ export const whatIfBicepTool = defineTool({
   handler: async (input, services, context) => {
     const result = await services.deployments.whatIf(
       { bundle: input.bundle, parameters: input.parameters, scope: input.scope },
-      context.principal,
+      context.principal.id,
       context.requestId,
+      context.signal,
     );
     return toPreviewOutput(result);
   },
@@ -268,7 +269,7 @@ export const deployBicepTool = defineTool({
       'The user has not approved the change, or you are inferring approval.',
       'You only need to restart or tag something — use the constrained operation tools instead.',
     ],
-    requiredScope:
+    scope:
       'The deployment identity needs write permission for every resource type in the template at ' +
       'the target scope. Role assignments additionally require privileged RBAC.',
     changesState: true,
@@ -305,8 +306,9 @@ export const deployBicepTool = defineTool({
         confirm: input.confirm,
         reason: input.reason,
       },
-      context.principal,
+      context.principal.id,
       context.requestId,
+      context.signal,
     );
     return toDeployOutput(result);
   },
@@ -332,7 +334,7 @@ export const getDeploymentTool = defineTool({
       'You need per-resource failure detail — use azure_list_deployment_operations.',
       'You want to know what a deployment would do — use azure_what_if_bicep.',
     ],
-    requiredScope: 'Read access to the deployment scope with the deployment identity.',
+    scope: 'Read access to the deployment scope with the deployment identity.',
     changesState: false,
     prerequisites: ['azure_deploy_bicep'],
     nextSteps: ['azure_list_deployment_operations'],
@@ -354,7 +356,8 @@ export const getDeploymentTool = defineTool({
   handler: async (input, services, context) => {
     const result = await services.deployments.getDeployment(
       { recordId: input.recordId, scope: input.scope, deploymentName: input.deploymentName },
-      context.principal,
+      context.principal.id,
+      context.signal,
     );
     return {
       ...(result.recordId === undefined ? {} : { recordId: result.recordId }),
@@ -392,7 +395,7 @@ export const listDeploymentOperationsTool = defineTool({
       'You only need the overall result — azure_get_deployment is cheaper.',
       'The deployment has not started yet.',
     ],
-    requiredScope: 'Read access to the deployment scope with the deployment identity.',
+    scope: 'Read access to the deployment scope with the deployment identity.',
     changesState: false,
     prerequisites: ['azure_get_deployment'],
   },
@@ -430,7 +433,8 @@ export const listDeploymentOperationsTool = defineTool({
         limit: input.limit,
         skipToken: input.skipToken,
       },
-      context.principal,
+      context.principal.id,
+      context.signal,
     );
     return {
       ...(result.recordId === undefined ? {} : { recordId: result.recordId }),
@@ -480,7 +484,7 @@ export const rollbackDeploymentTool = defineTool({
       'The earlier deployment did not succeed, or its record no longer exists.',
       'A forward fix is simpler and safer — use azure_what_if_bicep with corrected source.',
     ],
-    requiredScope: 'Same write permissions as azure_deploy_bicep at the original scope.',
+    scope: 'Same write permissions as azure_deploy_bicep at the original scope.',
     changesState: true,
     prerequisites: ['azure_get_deployment'],
     nextSteps: ['azure_get_deployment'],
@@ -516,8 +520,9 @@ export const rollbackDeploymentTool = defineTool({
         confirmationHash: input.confirmationHash,
         secureParameters: input.secureParameters,
       },
-      context.principal,
+      context.principal.id,
       context.requestId,
+      context.signal,
     );
 
     return outcome.phase === 'preview'

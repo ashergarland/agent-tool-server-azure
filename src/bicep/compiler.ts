@@ -3,11 +3,11 @@ import { createReadStream } from 'node:fs';
 import { access, constants, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
-import { AppError, internalError } from '../errors.js';
-import { Semaphore } from '../util/semaphore.js';
+import { AppError, internalError } from '@agent-tool-platform/runtime/errors';
+import { BoundedQueue } from '@agent-tool-platform/runtime/concurrency';
 import { withMaterializedBundle, type MaterializedBundle } from './materialize.js';
 import { assertBundleSourceAllowed, type ModulePolicy } from './modules.js';
-import { NodeProcessRunner, type ProcessRunner } from './process.js';
+import { PlatformProcessRunner, type ProcessRunner } from './process.js';
 import type {
   BicepCompiler,
   BicepCompileRequest,
@@ -26,8 +26,6 @@ export interface BicepCompilerConfig {
   readonly maxOutputBytes: number;
   readonly maxConcurrency: number;
   readonly modulePolicy: ModulePolicy;
-  readonly runAsUid: number | undefined;
-  readonly runAsGid: number | undefined;
 }
 
 /** Port so tests can assert checksum handling without shipping a binary. */
@@ -143,6 +141,36 @@ const scrubbedEnv = (root: string): Record<string, string> => {
   return env;
 };
 
+const awaitWithCancellation = <T>(
+  pending: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> => {
+  if (signal === undefined) return pending;
+  if (signal.aborted) return Promise.reject(new AppError('timeout', 'The request was cancelled'));
+
+  return new Promise<T>((resolve, reject) => {
+    const cancelled = (): void => {
+      signal.removeEventListener('abort', cancelled);
+      reject(new AppError('timeout', 'The request was cancelled'));
+    };
+    signal.addEventListener('abort', cancelled, { once: true });
+    void pending.then(
+      (value) => {
+        signal.removeEventListener('abort', cancelled);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', cancelled);
+        reject(
+          error instanceof Error
+            ? error
+            : internalError('Bicep compiler verification failed', error),
+        );
+      },
+    );
+  });
+};
+
 /**
  * Compiles Bicep by invoking a pinned, checksum-verified official Bicep CLI directly.
  *
@@ -151,20 +179,24 @@ const scrubbedEnv = (root: string): Record<string, string> => {
  * running server.
  */
 export class CliBicepCompiler implements BicepCompiler {
-  private readonly semaphore: Semaphore;
+  private readonly queue: BoundedQueue;
   private verification: Promise<BicepCompilerInfo> | undefined;
 
   public constructor(
     private readonly config: BicepCompilerConfig,
-    private readonly runner: ProcessRunner = new NodeProcessRunner(),
+    private readonly runner: ProcessRunner = new PlatformProcessRunner(),
     private readonly digest: FileDigest = new NodeFileDigest(),
   ) {
-    this.semaphore = new Semaphore(Math.max(1, config.maxConcurrency));
+    this.queue = new BoundedQueue(
+      Math.max(1, config.maxConcurrency),
+      Math.max(1, config.maxConcurrency) * 4,
+      'Bicep compilation work',
+    );
   }
 
-  public describe(): Promise<BicepCompilerInfo> {
+  public describe(signal?: AbortSignal): Promise<BicepCompilerInfo> {
     this.verification ??= this.verify();
-    return this.verification;
+    return awaitWithCancellation(this.verification, signal);
   }
 
   private async verify(): Promise<BicepCompilerInfo> {
@@ -217,8 +249,6 @@ export class CliBicepCompiler implements BicepCompiler {
         env: scrubbedEnv(probeRoot),
         timeoutMs: Math.min(this.config.timeoutMs, 15_000),
         maxOutputBytes: 4096,
-        uid: this.config.runAsUid,
-        gid: this.config.runAsGid,
       });
     } finally {
       await rm(probeRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -244,7 +274,7 @@ export class CliBicepCompiler implements BicepCompiler {
   public async compile(request: BicepCompileRequest): Promise<BicepCompileResult> {
     assertBundleSourceAllowed(request.bundle, this.config.modulePolicy);
 
-    const info = await this.describe();
+    const info = await this.describe(request.signal);
     if (!info.available) {
       throw new AppError(
         'internal_error',
@@ -252,10 +282,12 @@ export class CliBicepCompiler implements BicepCompiler {
       );
     }
 
-    return this.semaphore.run(() =>
-      withMaterializedBundle(request.bundle, (materialized) =>
-        this.runBuild(materialized, request.signal),
-      ),
+    return this.queue.run(
+      () =>
+        withMaterializedBundle(request.bundle, (materialized) =>
+          this.runBuild(materialized, request.signal),
+        ),
+      request.signal,
     );
   }
 
@@ -276,8 +308,6 @@ export class CliBicepCompiler implements BicepCompiler {
       timeoutMs: this.config.timeoutMs,
       maxOutputBytes: this.config.maxOutputBytes,
       signal,
-      uid: this.config.runAsUid,
-      gid: this.config.runAsGid,
     });
 
     if (result.timedOut) {

@@ -66,14 +66,21 @@ param tenantDeploymentsEnabled bool = false
 @description('Ask ARM what each identity can actually do before reporting a scope as usable.')
 param verifyRbac bool = true
 
+@description('Per-request Azure ARM transport timeout, in milliseconds.')
+@minValue(1000)
+@maxValue(600000)
+param armRequestTimeoutMs int = 30000
+
+@description('Overall timeout for an admitted guarded mutation, including Azure LRO polling.')
+@minValue(10000)
+@maxValue(1800000)
+param mutationTimeoutMs int = 600000
+
 @description('Enable the four guarded state-changing tools.')
 param mutationsEnabled bool = false
 
 @description('Require explicit confirmation for state-changing tools.')
 param mutationConfirmationRequired bool = true
-
-@description('Enable the authenticated remote MCP endpoint at /mcp.')
-param mcpHttpEnabled bool = true
 
 @description('Enable generic Bicep validate, what-if, deploy, status and rollback.')
 param deploymentsEnabled bool = false
@@ -141,12 +148,20 @@ param maxBodyBytes int = 4194304
 @minValue(0)
 param rateLimitMax int = 120
 
+@description('Pre-authentication request budget inside the rate limit window.')
+@minValue(0)
+param preAuthRateLimitMax int = 30
+
 @description('Rate limit window, in milliseconds.')
 @minValue(1000)
 param rateLimitWindowMs int = 60000
 
-@description('Per-request timeout, in milliseconds.')
-param requestTimeoutMs int = 30000
+@description('Fastify trust-proxy setting. Keep false unless the exact ingress proxy chain is known.')
+param trustProxy string = 'false'
+
+@description('Generic per-request timeout in milliseconds. Keep zero so provider-specific operation budgets remain authoritative.')
+@minValue(0)
+param requestTimeoutMs int = 0
 
 @description('How long to drain in-flight requests on SIGTERM, in milliseconds.')
 param shutdownGraceMs int = 10000
@@ -179,6 +194,7 @@ param maxReplicas int = 3
 param httpConcurrentRequests int = 20
 
 var deploymentIdentityConfigured = !empty(deploymentIdentityId)
+var deploymentLockTtlMs = max(900000, armRequestTimeoutMs * 4 + 1)
 
 var userAssignedIdentities = deploymentIdentityConfigured
   ? {
@@ -199,9 +215,7 @@ var optionalEnv = concat(
   empty(deploymentRecordTableEndpoint)
     ? []
     : [{ name: 'DEPLOYMENT_RECORD_TABLE_ENDPOINT', value: deploymentRecordTableEndpoint }],
-  deploymentIdentityConfigured
-    ? [{ name: 'AZURE_DEPLOYMENT_CLIENT_ID', value: deploymentIdentityClientId }]
-    : []
+  deploymentIdentityConfigured ? [{ name: 'AZURE_DEPLOYMENT_CLIENT_ID', value: deploymentIdentityClientId }] : []
 )
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
@@ -283,8 +297,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
               { name: 'API_KEYS', secretRef: 'connector-api-key' }
               { name: 'REQUEST_TIMEOUT_MS', value: string(requestTimeoutMs) }
               { name: 'SHUTDOWN_GRACE_MS', value: string(shutdownGraceMs) }
-              { name: 'HTTP_MAX_BODY_BYTES', value: string(maxBodyBytes) }
+              { name: 'BODY_LIMIT_BYTES', value: string(maxBodyBytes) }
+              { name: 'TRUST_PROXY', value: trustProxy }
               { name: 'RATE_LIMIT_MAX', value: string(rateLimitMax) }
+              { name: 'PRE_AUTH_RATE_LIMIT_MAX', value: string(preAuthRateLimitMax) }
               { name: 'RATE_LIMIT_WINDOW_MS', value: string(rateLimitWindowMs) }
               { name: 'AZURE_CLIENT_ID', value: identityClientId }
               { name: 'AZURE_SUBSCRIPTION_IDS', value: allowedSubscriptionIds }
@@ -295,12 +311,13 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
                 value: toLower(string(tenantDeploymentsEnabled))
               }
               { name: 'AZURE_VERIFY_RBAC', value: toLower(string(verifyRbac)) }
+              { name: 'AZURE_ARM_REQUEST_TIMEOUT_MS', value: string(armRequestTimeoutMs) }
+              { name: 'AZURE_MUTATION_TIMEOUT_MS', value: string(mutationTimeoutMs) }
               { name: 'MUTATIONS_ENABLED', value: toLower(string(mutationsEnabled)) }
               {
                 name: 'MUTATION_CONFIRMATION_REQUIRED'
                 value: toLower(string(mutationConfirmationRequired))
               }
-              { name: 'MCP_HTTP_ENABLED', value: toLower(string(mcpHttpEnabled)) }
               { name: 'DEPLOYMENTS_ENABLED', value: toLower(string(deploymentsEnabled)) }
               { name: 'BICEP_CLI_PATH', value: deploymentsEnabled ? bicepCliPath : '' }
               { name: 'BICEP_COMPILE_TIMEOUT_MS', value: string(bicepCompileTimeoutMs) }
@@ -322,6 +339,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
               { name: 'DEPLOYMENT_RECORD_STORE', value: deploymentRecordStore }
               { name: 'DEPLOYMENT_RECORD_TABLE_NAME', value: deploymentRecordTableName }
               { name: 'DEPLOYMENT_LOCK_TABLE_NAME', value: deploymentLockTableName }
+              { name: 'DEPLOYMENT_LOCK_TTL_MS', value: string(deploymentLockTtlMs) }
             ],
             optionalEnv
           )
@@ -345,6 +363,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
               }
               initialDelaySeconds: 5
               periodSeconds: 10
+              timeoutSeconds: 30
             }
             {
               type: 'Startup'

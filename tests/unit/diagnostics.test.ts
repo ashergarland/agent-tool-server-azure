@@ -97,4 +97,47 @@ describe('DiagnosticsService', () => {
     expect(input.query).toContain('healthresources');
     expect(input.query).toContain("availabilityState !~ 'Available'");
   });
+
+  it('propagates cancellation signals to every diagnostic provider read', async () => {
+    const { provider, service, listMetrics } = setup();
+    const controller = new AbortController();
+
+    await service.getActivityLog(
+      { subscriptionId: SUB_A, lookbackHours: 6, limit: 10 },
+      controller.signal,
+    );
+    await service.getMetrics(
+      {
+        resourceId: webAppId(),
+        metricNames: ['CpuPercentage'],
+        lookbackHours: 2,
+        intervalIso8601: 'PT5M',
+        aggregation: 'Average',
+      },
+      controller.signal,
+    );
+    await service.getUnhealthyResources({ subscriptionIds: [SUB_A], limit: 50 }, controller.signal);
+
+    const activityInput = provider.calls.find((call) => call.name === 'listActivityLog')
+      ?.args[0] as ActivityLogQueryInput;
+    const healthInput = provider.calls.find((call) => call.name === 'queryResourceGraph')
+      ?.args[0] as ResourceGraphQueryInput;
+    expect(activityInput.signal).toBe(controller.signal);
+    expect(listMetrics.mock.calls[0]?.[0].signal).toBe(controller.signal);
+    expect(healthInput.signal).toBe(controller.signal);
+  });
+
+  it('does not contact the provider for an already-cancelled diagnostic read', async () => {
+    const { provider, service } = setup();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      service.getActivityLog(
+        { subscriptionId: SUB_A, lookbackHours: 6, limit: 10 },
+        controller.signal,
+      ),
+    ).rejects.toThrow(/cancelled/);
+    expect(provider.calls).toHaveLength(0);
+  });
 });

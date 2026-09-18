@@ -9,15 +9,13 @@ export default defineConfig({
       reporter: ['text', 'lcov', 'json-summary'],
       include: ['src/**/*.ts'],
       // Entry points wire the process together and are covered by the Docker smoke test instead.
-      // The Azure SDK adapter and the Table Storage store are exercised against a live control
-      // plane, not in this suite; the hand-written ARM client beneath them is covered by
-      // tests/integration/arm-contract.test.ts.
+      // The Azure SDK adapter is exercised against a live control plane; the hand-written ARM
+      // client beneath it is covered by tests/integration/arm-contract.test.ts.
       exclude: [
         'src/index.ts',
-        'src/mcp/stdio.ts',
+        'src/stdio.ts',
         'src/provider/azure/index.ts',
         'src/provider/azure/credential.ts',
-        'src/deployments/store-azure.ts',
         'src/util/logger.ts',
       ],
       // Set just under the current numbers so an ordinary change does not fail the build, but a

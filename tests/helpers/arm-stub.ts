@@ -17,6 +17,7 @@ export interface StubReply {
   readonly body?: unknown;
   /** Sent verbatim, for testing malformed or oversized payloads. */
   readonly raw?: string;
+  readonly delayMs?: number;
 }
 
 export type StubHandler = (request: RecordedRequest, index: number) => StubReply;
@@ -70,11 +71,15 @@ export const startArmStub = async (initial: StubHandler): Promise<ArmStub> => {
 
       const reply = handler(recorded, requests.length - 1);
       const payload = reply.raw ?? (reply.body === undefined ? '' : JSON.stringify(reply.body));
-      response.writeHead(reply.status ?? 200, {
-        'content-type': 'application/json',
-        ...reply.headers,
-      });
-      response.end(payload);
+      const send = (): void => {
+        response.writeHead(reply.status ?? 200, {
+          'content-type': 'application/json',
+          ...reply.headers,
+        });
+        response.end(payload);
+      };
+      if ((reply.delayMs ?? 0) > 0) setTimeout(send, reply.delayMs);
+      else send();
     });
   });
 

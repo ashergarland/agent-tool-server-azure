@@ -1,7 +1,7 @@
 import type { DeploymentScope } from '../provider/types.js';
 
 export type DeploymentRecordStatus =
-  'previewed' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'superseded';
+  'previewed' | 'submitting' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'superseded';
 
 export interface PreviewSummary {
   readonly totalChanges: number;
@@ -76,9 +76,71 @@ export type DeploymentRecordPatch = Partial<
   >
 >;
 
+export interface DeploymentRecordPatchResult {
+  readonly record: DeploymentRecord;
+  readonly applied: boolean;
+}
+
+export interface DeploymentRecordPatchOptions {
+  readonly expectedStatuses?: readonly DeploymentRecordStatus[];
+}
+
+const ALLOWED_STATUS_TRANSITIONS: Readonly<
+  Record<DeploymentRecordStatus, readonly DeploymentRecordStatus[]>
+> = {
+  previewed: ['submitting', 'superseded'],
+  submitting: ['running', 'succeeded', 'failed', 'canceled'],
+  running: ['succeeded', 'failed', 'canceled'],
+  succeeded: [],
+  failed: [],
+  canceled: [],
+  superseded: [],
+};
+
+/**
+ * Applies a record patch without allowing stale writers to regress or replace a terminal state.
+ * Stores call this again after every optimistic-concurrency retry.
+ */
+export const applyDeploymentRecordPatch = (
+  existing: DeploymentRecord,
+  patch: DeploymentRecordPatch,
+  options: DeploymentRecordPatchOptions = {},
+): DeploymentRecordPatchResult => {
+  if (
+    options.expectedStatuses !== undefined &&
+    !options.expectedStatuses.includes(existing.status)
+  ) {
+    return { record: existing, applied: false };
+  }
+  if (patch.status !== undefined) {
+    if (patch.status === existing.status) return { record: existing, applied: false };
+    if (!ALLOWED_STATUS_TRANSITIONS[existing.status].includes(patch.status)) {
+      return { record: existing, applied: false };
+    }
+  }
+  return {
+    record: {
+      ...existing,
+      ...patch,
+      updatedAt: patch.updatedAt ?? new Date().toISOString(),
+    },
+    applied: true,
+  };
+};
+
 export interface DeploymentStoreInfo {
   readonly kind: string;
   readonly detail: string | undefined;
+}
+
+/** Status-free reason used when the distributed scope lease can no longer be proven held. */
+export class DeploymentLeaseLostError extends Error {
+  public readonly code = 'LEASE_LOST';
+
+  public constructor(scopeKey: string, cause: unknown) {
+    super(`The distributed deployment lease for ${scopeKey} was lost`, { cause });
+    this.name = 'DeploymentLeaseLostError';
+  }
 }
 
 /**
@@ -86,26 +148,34 @@ export interface DeploymentStoreInfo {
  * Azure implementation keeps records outside the container so a scale-to-zero app loses nothing.
  */
 export interface DeploymentRecordStore {
-  put(record: DeploymentRecord): Promise<void>;
+  put(record: DeploymentRecord, signal?: AbortSignal): Promise<void>;
   patch(
     id: string,
     principal: string,
     patch: DeploymentRecordPatch,
-  ): Promise<DeploymentRecord | undefined>;
-  get(id: string, principal: string): Promise<DeploymentRecord | undefined>;
+    signal?: AbortSignal,
+    options?: DeploymentRecordPatchOptions,
+  ): Promise<DeploymentRecordPatchResult | undefined>;
+  get(id: string, principal: string, signal?: AbortSignal): Promise<DeploymentRecord | undefined>;
   findByConfirmationHash(
     confirmationHash: string,
     principal: string,
+    signal?: AbortSignal,
   ): Promise<DeploymentRecord | undefined>;
   /** Most recent first. */
   listByScope(
     scopeKey: string,
     principal: string,
     limit: number,
+    signal?: AbortSignal,
   ): Promise<readonly DeploymentRecord[]>;
   /** Serialises concurrent work against one scope. */
-  withScopeLock<T>(scopeKey: string, run: () => Promise<T>): Promise<T>;
+  withScopeLock<T>(
+    scopeKey: string,
+    run: (leaseSignal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T>;
   describe(): DeploymentStoreInfo;
   /** Readiness probe. Must reject when the store is unusable. */
-  ping(): Promise<void>;
+  ping(signal?: AbortSignal): Promise<void>;
 }

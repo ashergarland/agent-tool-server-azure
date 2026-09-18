@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createToolRegistry } from '../../src/tools/registry.js';
+import { createToolRegistry } from '@agent-tool-platform/runtime/tools';
+import { toolDefinitions } from '../../src/tools/definitions/index.js';
 import { SERVER_INSTRUCTIONS } from '../../src/tools/instructions.js';
 import { rankOf, topTool } from '../helpers/routing.js';
 
-const registry = createToolRegistry();
+const registry = createToolRegistry(toolDefinitions);
 const tools = registry.list();
 const names = new Set(tools.map((tool) => tool.name));
 
@@ -12,7 +13,7 @@ describe('tool routing metadata', () => {
     for (const tool of tools) {
       expect(tool.routing.useWhen.length, `${tool.name} useWhen`).toBeGreaterThan(0);
       expect(tool.routing.doNotUseWhen.length, `${tool.name} doNotUseWhen`).toBeGreaterThan(0);
-      expect(tool.routing.requiredScope.length, `${tool.name} requiredScope`).toBeGreaterThan(0);
+      expect(tool.routing.scope?.length, `${tool.name} scope`).toBeGreaterThan(0);
     }
   });
 
@@ -36,8 +37,8 @@ describe('tool routing metadata', () => {
 
   it('renders guidance into the description agents actually read', () => {
     const deploy = registry.get('azure_deploy_bicep');
-    expect(deploy.description).toContain('CHANGES Azure state');
-    expect(deploy.description).toContain('Required scope:');
+    expect(deploy.description).toContain('CHANGES state');
+    expect(deploy.description).toContain('Scope:');
     expect(deploy.description).toContain('Use when:');
     expect(deploy.description).toContain('Do not use when:');
     expect(deploy.description.startsWith(deploy.baseDescription.trim())).toBe(true);
@@ -48,7 +49,7 @@ describe('tool routing metadata', () => {
 
   it('tells read-only tools apart from consequential ones in the rendered text', () => {
     for (const tool of tools) {
-      const marker = tool.kind === 'write' ? 'CHANGES Azure state' : 'State: read-only';
+      const marker = tool.kind === 'write' ? 'CHANGES state' : 'State: read-only';
       expect(tool.description, tool.name).toContain(marker);
     }
   });

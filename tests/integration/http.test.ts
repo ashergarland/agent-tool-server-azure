@@ -6,7 +6,7 @@ import { SUB_A, createFakeProvider, createTestLogger, webAppId } from '../helper
 
 const API_KEY = 'test-api-key-that-is-long-enough-000000';
 
-const buildApp = (overrides: Record<string, string> = {}): Application =>
+const buildApp = (overrides: Record<string, string> = {}): Promise<Application> =>
   createApplication({
     config: testConfig({ AUTH_MODE: 'api-key', API_KEYS: API_KEY, ...overrides }),
     logger: createTestLogger() as unknown as Logger,
@@ -17,12 +17,12 @@ describe('HTTP surface', () => {
   let app: Application;
 
   beforeAll(async () => {
-    app = buildApp();
+    app = await buildApp();
     await app.http.ready();
   });
 
   afterAll(async () => {
-    await app.http.close();
+    await app.shutdown();
   });
 
   const auth = { authorization: ['Bearer', API_KEY].join(' ') };
@@ -94,15 +94,15 @@ describe('HTTP surface', () => {
     expect(response.json().result.subscriptions).toHaveLength(2);
   });
 
-  it('accepts both a bare payload and an { input } envelope', async () => {
+  it('rejects the legacy { input } envelope instead of ambiguously accepting two contracts', async () => {
     const response = await app.http.inject({
       method: 'POST',
       url: '/tools/azure_list_resource_groups',
       headers: auth,
       payload: { input: { subscriptionId: SUB_A } },
     });
-    expect(response.statusCode).toBe(200);
-    expect(response.json().result.resourceGroups).toHaveLength(2);
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe('bad_request');
   });
 
   it('returns 400 with validation issues for bad input', async () => {
@@ -174,7 +174,7 @@ describe('HTTP surface', () => {
 
 describe('rate limiting', () => {
   it('returns 429 once the window is exhausted', async () => {
-    const app = buildApp({ RATE_LIMIT_MAX: '2' });
+    const app = await buildApp({ RATE_LIMIT_MAX: '2' });
     await app.http.ready();
     const headers = { authorization: ['Bearer', API_KEY].join(' ') };
 
@@ -184,13 +184,13 @@ describe('rate limiting', () => {
     expect(limited.statusCode).toBe(429);
     expect(limited.json().error.code).toBe('rate_limited');
 
-    await app.http.close();
+    await app.shutdown();
   });
 });
 
 describe('disabled auth mode', () => {
   it('allows anonymous tool calls in development', async () => {
-    const app = createApplication({
+    const app = await createApplication({
       config: testConfig({ AUTH_MODE: 'disabled' }),
       logger: createTestLogger() as unknown as Logger,
       provider: createFakeProvider(),
@@ -204,6 +204,6 @@ describe('disabled auth mode', () => {
     });
     expect(response.statusCode).toBe(200);
 
-    await app.http.close();
+    await app.shutdown();
   });
 });

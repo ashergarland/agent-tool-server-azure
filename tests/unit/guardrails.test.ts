@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { AppError } from '@agent-tool-platform/runtime/errors';
 import { Guardrails } from '../../src/services/guardrails.js';
-import { AppError } from '../../src/errors.js';
 import { testConfig } from '../helpers/config.js';
 import { SUB_A, SUB_B, webAppId } from '../helpers/fake-provider.js';
 
@@ -67,7 +67,7 @@ describe('Guardrails', () => {
       const guardrails = new Guardrails(testConfig());
       expect(() =>
         guardrails.assertMutationAllowed({ toolName: 'x', confirm: true, dryRun: false }),
-      ).toThrow(/MUTATIONS_ENABLED is false/);
+      ).toThrow(/mutations are disabled/);
     });
 
     it('requires explicit confirmation when mutations are enabled', () => {

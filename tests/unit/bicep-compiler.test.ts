@@ -9,7 +9,11 @@ import {
   assertModuleReferencesAllowed,
 } from '../../src/bicep/modules.js';
 import { createProcessRunner, processResult, RG_TEMPLATE } from '../helpers/bicep.js';
-import type { ProcessRunRequest } from '../../src/bicep/process.js';
+import type {
+  ProcessRunRequest,
+  ProcessRunResult,
+  ProcessRunner,
+} from '../../src/bicep/process.js';
 
 const bundle = (content = 'param name string\n') =>
   normalizeBundle({ mainFile: 'main.bicep', files: [{ path: 'main.bicep', content }] });
@@ -193,6 +197,35 @@ describe('CliBicepCompiler', () => {
     );
   });
 
+  it('stops a cancelled first compilation from waiting for shared compiler verification', async () => {
+    let markProbeStarted = (): void => undefined;
+    const probeStarted = new Promise<void>((resolve) => {
+      markProbeStarted = resolve;
+    });
+    let finishProbe: ((result: ProcessRunResult) => void) | undefined;
+    const runner: ProcessRunner = {
+      run(request) {
+        if (request.args[0] !== '--version') {
+          return Promise.resolve(processResult({ stdout: JSON.stringify(RG_TEMPLATE) }));
+        }
+        markProbeStarted();
+        return new Promise<ProcessRunResult>((resolve) => {
+          finishProbe = resolve;
+        });
+      },
+    };
+    const compiler = new CliBicepCompiler(config(), runner, digest(DIGEST));
+    const controller = new AbortController();
+    const compilation = compiler.compile({ bundle: bundle(), signal: controller.signal });
+
+    await probeStarted;
+    controller.abort();
+    await expect(compilation).rejects.toMatchObject({ code: 'timeout' });
+
+    finishProbe?.(processResult({ stdout: '0.30.0\n' }));
+    await expect(compiler.describe()).resolves.toMatchObject({ available: true });
+  });
+
   it('refuses output that exceeded the size limit instead of parsing a truncated template', async () => {
     const runner = runnerFor(() => processResult({ stdout: '{"a":', truncated: true }));
     await expect(compilerFor(runner).compile({ bundle: bundle() })).rejects.toThrowError(
@@ -318,8 +351,6 @@ describe('module policy', () => {
   const policy = {
     remoteModulesEnabled: true,
     allowedRegistries: ['contoso.azurecr.io'],
-    templateSpecsEnabled: true,
-    allowedSubscriptionIds: ['11111111-1111-1111-1111-111111111111'],
   };
 
   it('allows an explicitly allow-listed registry', () => {
@@ -343,21 +374,12 @@ describe('module policy', () => {
     ).toThrowError(/alias references are not supported/);
   });
 
-  it('rejects a Template Spec outside the allow-listed subscriptions', () => {
-    expect(() =>
-      assertModuleReferencesAllowed(
-        bundle("module x 'ts:99999999-9999-9999-9999-999999999999/rg/spec:1.0' = {}\n"),
-        policy,
-      ),
-    ).toThrowError(/outside the allow-list/);
-  });
-
-  it('rejects Template Specs entirely when they are disabled', () => {
+  it('rejects Template Specs because their linked content cannot be inspected', () => {
     expect(() =>
       assertModuleReferencesAllowed(
         bundle("module x 'ts:11111111-1111-1111-1111-111111111111/rg/spec:1.0' = {}\n"),
-        { ...policy, templateSpecsEnabled: false },
+        policy,
       ),
-    ).toThrowError(/Template Spec references are disabled/);
+    ).toThrowError(/linked template content cannot be inspected locally/);
   });
 });

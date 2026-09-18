@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { platformEnvSchema } from '@agent-tool-platform/runtime/config';
 import { envSchema } from '../../src/config/index.js';
 import { GUID, findDeploymentSpecificHosts } from '../../scripts/lib/hygiene.js';
 
@@ -136,7 +137,6 @@ describe('public parameter examples', () => {
       };
       expect(parsed.parameters['enableMutations']?.value, file).toBe(false);
       expect(parsed.parameters['enableDeployments']?.value, file).toBe(false);
-      expect(parsed.parameters['enableMcpHttp']?.value, file).toBe(false);
       expect(parsed.parameters['tenantDeploymentsEnabled']?.value, file).toBe(false);
       expect(parsed.parameters['bicepRemoteModulesEnabled']?.value, file).toBe(false);
       expect(parsed.parameters['mutationConfirmationRequired']?.value, file).toBe(true);
@@ -291,7 +291,10 @@ describe('release scripts', () => {
 
 describe('container app environment contract', () => {
   it('only sets variables the server understands', () => {
-    const known = new Set(Object.keys(envSchema.shape));
+    const known = new Set([
+      ...Object.keys(platformEnvSchema.shape),
+      ...Object.keys(envSchema.shape),
+    ]);
     for (const name of containerAppEnvNames) {
       expect(known, `container-app.bicep sets unknown variable ${name}`).toContain(name);
     }
@@ -305,11 +308,15 @@ describe('container app environment contract', () => {
       'DEPLOYMENTS_ENABLED',
       'AZURE_SUBSCRIPTION_IDS',
       'AZURE_ALLOWED_RESOURCE_GROUPS',
+      'AZURE_ARM_REQUEST_TIMEOUT_MS',
+      'AZURE_MUTATION_TIMEOUT_MS',
       'BICEP_REMOTE_MODULES_ENABLED',
       'DEPLOYMENT_RECORD_STORE',
+      'DEPLOYMENT_LOCK_TTL_MS',
     ]) {
       expect(containerAppEnvNames).toContain(required);
     }
+    expect(containerAppBicep).toContain('max(900000, armRequestTimeoutMs * 4 + 1)');
   });
 
   it('probes readiness separately from liveness', () => {

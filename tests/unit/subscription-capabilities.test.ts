@@ -3,6 +3,7 @@ import { InventoryService } from '../../src/services/inventory.js';
 import { Guardrails } from '../../src/services/guardrails.js';
 import { testConfig } from '../helpers/config.js';
 import { SUB_A, SUB_B, createFakeProvider } from '../helpers/fake-provider.js';
+import { DEPLOYMENT_REQUIRED_ACTIONS } from '../../src/provider/permissions.js';
 
 const DEPLOYMENT_ENV = {
   DEPLOYMENTS_ENABLED: 'true',
@@ -28,7 +29,6 @@ const setup = (
 };
 
 const READ = 'Microsoft.Resources/subscriptions/resourceGroups/read';
-const DEPLOY = 'Microsoft.Resources/deployments/write';
 
 describe('subscription capabilities', () => {
   it('reports a subscription as readable only when the operator identity holds RBAC there', async () => {
@@ -77,7 +77,7 @@ describe('subscription capabilities', () => {
       {
         [`operator:/subscriptions/${SUB_A}`]: [READ],
         [`operator:/subscriptions/${SUB_B}`]: [READ],
-        [`deployment:/subscriptions/${SUB_A}`]: [DEPLOY],
+        [`deployment:/subscriptions/${SUB_A}`]: [...DEPLOYMENT_REQUIRED_ACTIONS],
         // The deployment identity has read but no write in SUB_B.
         [`deployment:/subscriptions/${SUB_B}`]: [READ],
       },
@@ -87,6 +87,42 @@ describe('subscription capabilities', () => {
     expect(subscriptions).toEqual([
       expect.objectContaining({ subscriptionId: SUB_A, readable: true, deployable: true }),
       expect.objectContaining({ subscriptionId: SUB_B, readable: true, deployable: false }),
+    ]);
+  });
+
+  it('does not report deployment capability when any workflow permission is missing', async () => {
+    const incomplete = DEPLOYMENT_REQUIRED_ACTIONS.filter(
+      (action) => action !== 'Microsoft.Resources/deployments/operations/read',
+    );
+    const { service } = setup(
+      { ...DEPLOYMENT_ENV, AZURE_SUBSCRIPTION_IDS: SUB_A },
+      {
+        [`operator:/subscriptions/${SUB_A}`]: [READ],
+        [`deployment:/subscriptions/${SUB_A}`]: incomplete,
+      },
+    );
+
+    await expect(service.listSubscriptions()).resolves.toEqual([
+      expect.objectContaining({ subscriptionId: SUB_A, deployable: false }),
+    ]);
+  });
+
+  it('derives capabilities from allowed resource-group scopes when configured', async () => {
+    const scope = `/subscriptions/${SUB_A}/resourceGroups/rg-prod`;
+    const { service } = setup(
+      {
+        ...DEPLOYMENT_ENV,
+        AZURE_SUBSCRIPTION_IDS: SUB_A,
+        AZURE_ALLOWED_RESOURCE_GROUPS: 'rg-prod',
+      },
+      {
+        [`operator:${scope}`]: [READ],
+        [`deployment:${scope}`]: [...DEPLOYMENT_REQUIRED_ACTIONS],
+      },
+    );
+
+    await expect(service.listSubscriptions()).resolves.toEqual([
+      expect.objectContaining({ subscriptionId: SUB_A, readable: true, deployable: true }),
     ]);
   });
 

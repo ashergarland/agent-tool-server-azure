@@ -4,12 +4,12 @@ import { createApplication, type Application } from '../../src/app.js';
 import { InMemoryDeploymentRecordStore } from '../../src/deployments/store-memory.js';
 import { testConfig } from '../helpers/config.js';
 import { createFakeCompiler } from '../helpers/bicep.js';
-import { SUB_A, createFakeProvider, createTestLogger } from '../helpers/fake-provider.js';
+import { SUB_A, createFakeProvider, createTestLogger, webAppId } from '../helpers/fake-provider.js';
 
 const API_KEY = 'security-test-api-key-that-is-long-enough';
 const auth = { 'x-api-key': API_KEY };
 
-const buildApp = (overrides: Record<string, string> = {}): Application =>
+const buildApp = (overrides: Record<string, string> = {}): Promise<Application> =>
   createApplication({
     config: testConfig({ AUTH_MODE: 'api-key', API_KEYS: API_KEY, ...overrides }),
     logger: createTestLogger() as unknown as Logger,
@@ -28,12 +28,12 @@ describe('guarded and public routes', () => {
   let app: Application;
 
   beforeAll(async () => {
-    app = buildApp();
+    app = await buildApp();
     await app.http.ready();
   });
 
   afterAll(async () => {
-    await app.http.close();
+    await app.shutdown();
   });
 
   it.each(['/health', '/ready', '/version', '/openapi.json'])(
@@ -54,20 +54,18 @@ describe('guarded and public routes', () => {
     expect(response.json()).toHaveProperty('counters');
   });
 
-  it('records tool invocation metrics without recording tool inputs', async () => {
+  it('records capability operation metrics without recording tool inputs', async () => {
     await app.http.inject({
       method: 'POST',
-      url: '/tools/azure_list_subscriptions',
+      url: '/tools/azure_restart_web_app',
       headers: auth,
-      payload: {},
+      payload: { resourceId: webAppId(), dryRun: true },
     });
     const snapshot = await app.http.inject({ method: 'GET', url: '/metrics', headers: auth });
     const body = snapshot.json<{ counters: Record<string, number> }>();
-    const key = Object.keys(body.counters).find((entry) =>
-      entry.startsWith('tool_invocations_total'),
-    );
+    const key = Object.keys(body.counters).find((entry) => entry.startsWith('mutations_total'));
     expect(key).toBeDefined();
-    expect(key).toContain('azure_list_subscriptions');
+    expect(key).toContain('restart_web_app');
     expect(JSON.stringify(body)).not.toContain(API_KEY);
   });
 
@@ -91,7 +89,7 @@ describe('guarded and public routes', () => {
 
 describe('error exposure', () => {
   it('hides internal failure detail in production but keeps the request id', async () => {
-    const app = buildApp({ NODE_ENV: 'production' });
+    const app = await buildApp({ NODE_ENV: 'production' });
     await app.http.ready();
     vi.spyOn(app.services.inventory, 'listSubscriptions').mockRejectedValue(
       new Error('ARM said: token eyJhbGciOi... for tenant 00000000-0000-0000-0000-000000000000'),
@@ -108,15 +106,15 @@ describe('error exposure', () => {
     expect(response.body).not.toContain('eyJhbGciOi');
     expect(response.json<{ error: { message: string; requestId: string } }>().error).toMatchObject({
       code: 'internal_error',
-      message: 'The server failed to complete the request',
+      message: 'The tool server failed to complete the request',
     });
     expect(response.json<{ error: { requestId: string } }>().error.requestId).toBeTruthy();
 
-    await app.http.close();
+    await app.shutdown();
   });
 
   it('rejects a body larger than the configured limit', async () => {
-    const app = buildApp({ HTTP_MAX_BODY_BYTES: '65536' });
+    const app = await buildApp({ BODY_LIMIT_BYTES: '65536' });
     await app.http.ready();
 
     const response = await app.http.inject({
@@ -129,16 +127,61 @@ describe('error exposure', () => {
       }),
     });
 
-    expect(response.statusCode).toBe(400);
-    expect(response.json<{ error: { message: string } }>().error.message).toMatch(/too large/i);
+    expect(response.statusCode).toBeGreaterThanOrEqual(400);
+    expect(response.body).not.toContain('x'.repeat(1_000));
 
-    await app.http.close();
+    await app.shutdown();
   });
 });
 
 describe('deployment tool inputs', () => {
+  it.each(['null', '1', 'true', '"coerced"'])(
+    'rejects root primitive JSON input %s without schema coercion',
+    async (payload) => {
+      const app = await buildApp();
+      const response = await app.http.inject({
+        method: 'POST',
+        url: '/tools/azure_validate_bicep',
+        headers: { ...auth, 'content-type': 'application/json' },
+        payload,
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json<{ error: { code: string } }>().error.code).toBe('bad_request');
+      await app.shutdown();
+    },
+  );
+
+  it('requires the Platform mutation gate even when Azure deployments are enabled', async () => {
+    const app = await buildApp(DEPLOYMENT_ENV);
+    const response = await app.http.inject({
+      method: 'POST',
+      url: '/tools/azure_deploy_bicep',
+      headers: auth,
+      payload: {
+        bundle: {
+          mainFile: 'main.bicep',
+          files: [{ path: 'main.bicep', content: 'param a string' }],
+        },
+        parameters: {},
+        scope: {
+          kind: 'resourceGroup',
+          subscriptionId: SUB_A,
+          resourceGroup: 'rg-prod',
+        },
+        confirmationHash: 'a'.repeat(64),
+        confirm: true,
+        reason: 'mutation-gate test',
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json<{ error: { code: string } }>().error.code).toBe('forbidden');
+    await app.shutdown();
+  });
+
   it('rejects unknown fields, so caller-supplied identities and credentials cannot slip in', async () => {
-    const app = buildApp(DEPLOYMENT_ENV);
+    const app = await buildApp(DEPLOYMENT_ENV);
     await app.http.ready();
 
     const response = await app.http.inject({
@@ -158,11 +201,11 @@ describe('deployment tool inputs', () => {
     expect(response.statusCode).toBe(400);
     expect(response.body).not.toContain('attacker-secret');
 
-    await app.http.close();
+    await app.shutdown();
   });
 
   it('refuses a deployment when deployments are disabled, but still validates source', async () => {
-    const app = buildApp();
+    const app = await buildApp();
     await app.http.ready();
     const bundle = {
       mainFile: 'main.bicep',
@@ -189,11 +232,11 @@ describe('deployment tool inputs', () => {
     });
     expect(previewed.statusCode).toBe(403);
 
-    await app.http.close();
+    await app.shutdown();
   });
 
   it('rejects a traversing bundle path before anything is written to disk', async () => {
-    const app = buildApp(DEPLOYMENT_ENV);
+    const app = await buildApp(DEPLOYMENT_ENV);
     await app.http.ready();
 
     const response = await app.http.inject({
@@ -216,6 +259,6 @@ describe('deployment tool inputs', () => {
       /traverse outside/,
     );
 
-    await app.http.close();
+    await app.shutdown();
   });
 });

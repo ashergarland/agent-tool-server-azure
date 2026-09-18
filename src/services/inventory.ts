@@ -1,9 +1,11 @@
+import { timedOut } from '@agent-tool-platform/runtime/errors';
 import type {
   AzureProvider,
   AzureResource,
   ResourceGroup,
   Subscription,
 } from '../provider/types.js';
+import { DEPLOYMENT_REQUIRED_ACTIONS } from '../provider/permissions.js';
 import { escapeKqlString } from '../provider/azure/index.js';
 import type { AppConfig } from '../config/index.js';
 import type { Guardrails } from './guardrails.js';
@@ -51,7 +53,10 @@ const PROJECTION =
   '| project id, name, type, location, resourceGroup, subscriptionId, kind, sku, tags';
 
 const READ_ACTION = 'Microsoft.Resources/subscriptions/resourceGroups/read';
-const DEPLOY_ACTION = 'Microsoft.Resources/deployments/write';
+
+const assertNotCancelled = (signal: AbortSignal | undefined): void => {
+  if (signal?.aborted) throw timedOut('The request was cancelled');
+};
 
 /** ARM permission strings support a trailing `*` wildcard on each segment. */
 const matchesAction = (pattern: string, action: string): boolean => {
@@ -77,8 +82,10 @@ export class InventoryService {
     private readonly now: () => number = () => Date.now(),
   ) {}
 
-  public async listSubscriptions(): Promise<readonly SubscriptionCapability[]> {
-    const subscriptions = await this.provider.listSubscriptions();
+  public async listSubscriptions(signal?: AbortSignal): Promise<readonly SubscriptionCapability[]> {
+    assertNotCancelled(signal);
+    const subscriptions = await this.provider.listSubscriptions(signal);
+    assertNotCancelled(signal);
     const allowed = this.guardrails.allowedSubscriptionIds;
     const visible =
       allowed.length === 0
@@ -87,7 +94,11 @@ export class InventoryService {
             allowed.includes(subscription.subscriptionId.toLowerCase()),
           );
 
-    return Promise.all(visible.map((subscription) => this.withCapabilities(subscription)));
+    const capabilities = await Promise.all(
+      visible.map((subscription) => this.withCapabilities(subscription, signal)),
+    );
+    assertNotCancelled(signal);
+    return capabilities;
   }
 
   /**
@@ -98,7 +109,10 @@ export class InventoryService {
    * deployable when the deployment identity has no RBAC there would send an agent into a
    * guaranteed 403 halfway through a plan.
    */
-  private async withCapabilities(subscription: Subscription): Promise<SubscriptionCapability> {
+  private async withCapabilities(
+    subscription: Subscription,
+    signal?: AbortSignal,
+  ): Promise<SubscriptionCapability> {
     const armScope = `/subscriptions/${subscription.subscriptionId}`;
     const inDeploymentScope =
       this.config.deployments.enabled &&
@@ -108,31 +122,55 @@ export class InventoryService {
       return { ...subscription, readable: true, deployable: inDeploymentScope };
     }
 
-    const readable = await this.canPerform(armScope, 'operator', READ_ACTION);
+    const permissionScopes =
+      this.config.azure.allowedResourceGroups.length === 0
+        ? [armScope]
+        : this.config.azure.allowedResourceGroups.map(
+            (resourceGroup) => `${armScope}/resourceGroups/${resourceGroup}`,
+          );
+    const readable = (
+      await Promise.all(permissionScopes.map((scope) => this.hasReadPermission(scope, signal)))
+    ).some(Boolean);
     const deployable = inDeploymentScope
-      ? await this.canPerform(armScope, 'deployment', DEPLOY_ACTION)
+      ? (
+          await Promise.all(
+            permissionScopes.map((scope) =>
+              this.hasEffectivePermissions(
+                scope,
+                'deployment',
+                DEPLOYMENT_REQUIRED_ACTIONS,
+                signal,
+              ),
+            ),
+          )
+        ).some(Boolean)
       : false;
+    assertNotCancelled(signal);
     return { ...subscription, readable, deployable };
   }
 
-  private async canPerform(
+  public async hasEffectivePermission(
     armScope: string,
     identity: 'operator' | 'deployment',
     action: string,
+    signal?: AbortSignal,
   ): Promise<boolean> {
+    assertNotCancelled(signal);
     const key = `${identity}\u0000${armScope}\u0000${action}`;
     const cached = this.permissionCache.get(key);
     if (cached && cached.expiresAt > this.now()) return cached.value;
 
     let value = false;
     try {
-      const permissions = await this.provider.getEffectivePermissions(armScope, identity);
+      const permissions = await this.provider.getEffectivePermissions(armScope, identity, signal);
+      assertNotCancelled(signal);
       value = permissions.some(
         (permission) =>
           permission.actions.some((candidate) => matchesAction(candidate, action)) &&
           !permission.notActions.some((candidate) => matchesAction(candidate, action)),
       );
     } catch {
+      assertNotCancelled(signal);
       // A scope the identity cannot even query permissions for is, by definition, not usable.
       value = false;
     }
@@ -144,20 +182,46 @@ export class InventoryService {
     return value;
   }
 
-  public async listResourceGroups(subscriptionId: string): Promise<readonly ResourceGroup[]> {
+  public hasReadPermission(armScope: string, signal?: AbortSignal): Promise<boolean> {
+    return this.hasEffectivePermission(armScope, 'operator', READ_ACTION, signal);
+  }
+
+  public async hasEffectivePermissions(
+    armScope: string,
+    identity: 'operator' | 'deployment',
+    actions: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const allowed = await Promise.all(
+      actions.map((action) => this.hasEffectivePermission(armScope, identity, action, signal)),
+    );
+    assertNotCancelled(signal);
+    return allowed.every(Boolean);
+  }
+
+  public async listResourceGroups(
+    subscriptionId: string,
+    signal?: AbortSignal,
+  ): Promise<readonly ResourceGroup[]> {
     this.guardrails.assertSubscriptionAllowed(subscriptionId);
-    const groups = await this.provider.listResourceGroups(subscriptionId);
+    const groups = await this.provider.listResourceGroups(subscriptionId, signal);
+    assertNotCancelled(signal);
     const allowed = this.guardrails.allowedResourceGroups;
     if (allowed.length === 0) return groups;
     return groups.filter((group) => allowed.includes(group.name.toLowerCase()));
   }
 
-  public async getResource(resourceId: string): Promise<AzureResource> {
+  public async getResource(resourceId: string, signal?: AbortSignal): Promise<AzureResource> {
     this.guardrails.assertResourceIdInScope(resourceId);
-    return this.provider.getResourceById(resourceId);
+    const resource = await this.provider.getResourceById(resourceId, signal);
+    assertNotCancelled(signal);
+    return resource;
   }
 
-  public async searchResources(input: ResourceSearchInput): Promise<ResourceSearchResult> {
+  public async searchResources(
+    input: ResourceSearchInput,
+    signal?: AbortSignal,
+  ): Promise<ResourceSearchResult> {
     const scope = this.guardrails.resolveSubscriptionScope(input.subscriptionIds);
     if (input.resourceGroup) this.guardrails.assertResourceGroupAllowed(input.resourceGroup);
 
@@ -193,7 +257,9 @@ export class InventoryService {
       query: clauses.join(' '),
       top: input.limit,
       ...(input.skipToken ? { skipToken: input.skipToken } : {}),
+      ...(signal === undefined ? {} : { signal }),
     });
+    assertNotCancelled(signal);
 
     return {
       resources: page.rows.map(toResource),
@@ -203,7 +269,10 @@ export class InventoryService {
     };
   }
 
-  public async runGraphQuery(input: RawGraphQueryInput): Promise<RawGraphQueryResult> {
+  public async runGraphQuery(
+    input: RawGraphQueryInput,
+    signal?: AbortSignal,
+  ): Promise<RawGraphQueryResult> {
     this.guardrails.assertReadOnlyQuery(input.query);
     const scope = this.guardrails.resolveSubscriptionScope(input.subscriptionIds);
 
@@ -212,7 +281,9 @@ export class InventoryService {
       query: input.query,
       top: input.limit,
       ...(input.skipToken ? { skipToken: input.skipToken } : {}),
+      ...(signal === undefined ? {} : { signal }),
     });
+    assertNotCancelled(signal);
 
     return {
       rows: page.rows,

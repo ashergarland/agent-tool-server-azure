@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { createToolRegistry } from '../../src/tools/registry.js';
+import { createToolRegistry } from '@agent-tool-platform/runtime/tools';
 import { toolDefinitions } from '../../src/tools/definitions/index.js';
 import type { ToolDefinition } from '../../src/tools/types.js';
 import { createServices } from '../../src/services/index.js';
@@ -8,7 +8,12 @@ import { testConfig } from '../helpers/config.js';
 import { createFakeProvider, createTestLogger } from '../helpers/fake-provider.js';
 import type { Logger } from 'pino';
 
-const context = { requestId: 'req-1', principal: 'test', transport: 'http' } as const;
+const context = {
+  requestId: 'req-1',
+  principal: { id: 'test', kind: 'anonymous' as const },
+  transport: 'http',
+  signal: new AbortController().signal,
+} as const;
 
 const buildServices = (overrides: Record<string, string> = {}) => {
   const provider = createFakeProvider();
@@ -21,7 +26,7 @@ const buildServices = (overrides: Record<string, string> = {}) => {
 };
 
 describe('ToolRegistry', () => {
-  const registry = createToolRegistry();
+  const registry = createToolRegistry(toolDefinitions);
 
   it('registers every declared tool', () => {
     expect(registry.list()).toHaveLength(toolDefinitions.length);

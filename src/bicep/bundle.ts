@@ -1,4 +1,4 @@
-import { badRequest } from '../errors.js';
+import { badRequest } from '@agent-tool-platform/runtime/errors';
 import { hashJson } from './hash.js';
 import type { BicepBundle, BundleLimits, NormalizedBundle } from './types.js';
 

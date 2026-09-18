@@ -23,7 +23,7 @@
       ],
       "packageArguments": [
         { "type": "positional", "value": "node", "isRequired": true },
-        { "type": "positional", "value": "dist/mcp/stdio.js", "isRequired": true }
+        { "type": "positional", "value": "dist/stdio.js", "isRequired": true }
       ],
       "environmentVariables": [
         {

@@ -4,8 +4,8 @@ import { ResourceManagementClient } from '@azure/arm-resources';
 import { WebSiteManagementClient } from '@azure/arm-appservice';
 import { MetricsQueryClient, type MetricValue } from '@azure/monitor-query';
 import type { TokenCredential } from '@azure/core-auth';
+import { AppError, notFound } from '@agent-tool-platform/runtime/errors';
 import type { AppConfig } from '../../config/index.js';
-import { AppError, notFound } from '../../errors.js';
 import type {
   ActivityLogEntry,
   ActivityLogQueryInput,
@@ -29,6 +29,9 @@ import { ArmRestClient } from './arm-rest.js';
 import { createAzureCredentials, type AzureCredentials } from './credential.js';
 import { ArmDeploymentClient } from './deployments.js';
 import { mapAzureError } from './errors.js';
+import { azureSdkOperationOptions } from './options.js';
+
+export { azureSdkOperationOptions } from './options.js';
 
 const ACTIVITY_LOG_API_VERSION = '2015-04-01';
 
@@ -126,7 +129,7 @@ export class AzureSdkProvider implements AzureProvider {
     this.armRest = new ArmRestClient(
       this.credential,
       this.config.azure.armEndpoint,
-      this.config.http.requestTimeoutMs,
+      this.config.azure.armRequestTimeoutMs,
     );
 
     const deploymentOptions = {
@@ -139,7 +142,7 @@ export class AzureSdkProvider implements AzureProvider {
       new ArmRestClient(
         credentials.deployment,
         this.config.azure.armEndpoint,
-        this.config.http.requestTimeoutMs,
+        this.config.azure.armRequestTimeoutMs,
       ),
       deploymentOptions,
     );
@@ -172,7 +175,11 @@ export class AzureSdkProvider implements AzureProvider {
     return client;
   }
 
-  public async listSubscriptions(): Promise<readonly Subscription[]> {
+  private operationOptions(signal?: AbortSignal) {
+    return azureSdkOperationOptions(this.config.azure.armRequestTimeoutMs, signal);
+  }
+
+  public async listSubscriptions(signal?: AbortSignal): Promise<readonly Subscription[]> {
     const page = await this.queryResourceGraph({
       subscriptionIds: [],
       query: [
@@ -182,6 +189,7 @@ export class AzureSdkProvider implements AzureProvider {
         '| order by name asc',
       ].join(' '),
       top: 1000,
+      ...(signal === undefined ? {} : { signal }),
     });
 
     return page.rows.map((row) => ({
@@ -192,10 +200,15 @@ export class AzureSdkProvider implements AzureProvider {
     }));
   }
 
-  public async listResourceGroups(subscriptionId: string): Promise<readonly ResourceGroup[]> {
+  public async listResourceGroups(
+    subscriptionId: string,
+    signal?: AbortSignal,
+  ): Promise<readonly ResourceGroup[]> {
     try {
       const groups: ResourceGroup[] = [];
-      for await (const group of this.resources(subscriptionId).resourceGroups.list()) {
+      for await (const group of this.resources(subscriptionId).resourceGroups.list(
+        this.operationOptions(signal),
+      )) {
         groups.push({
           id: group.id ?? '',
           name: group.name ?? '',
@@ -210,7 +223,7 @@ export class AzureSdkProvider implements AzureProvider {
     }
   }
 
-  public async getResourceById(resourceId: string): Promise<AzureResource> {
+  public async getResourceById(resourceId: string, signal?: AbortSignal): Promise<AzureResource> {
     const subscriptionId = subscriptionIdFromResourceId(resourceId);
     const page = await this.queryResourceGraph({
       subscriptionIds: subscriptionId ? [subscriptionId] : [],
@@ -222,6 +235,7 @@ export class AzureSdkProvider implements AzureProvider {
         .join(' ')
         .replace('@resourceId', `'${escapeKqlString(resourceId)}'`),
       top: 1,
+      ...(signal === undefined ? {} : { signal }),
     });
 
     const row = page.rows[0];
@@ -231,15 +245,20 @@ export class AzureSdkProvider implements AzureProvider {
 
   public async queryResourceGraph(input: ResourceGraphQueryInput): Promise<ResourceGraphPage> {
     try {
-      const response = await this.graphClient.resources({
-        ...(input.subscriptionIds.length > 0 ? { subscriptions: [...input.subscriptionIds] } : {}),
-        query: input.query,
-        options: {
-          top: input.top,
-          resultFormat: 'objectArray',
-          ...(input.skipToken ? { skipToken: input.skipToken } : {}),
+      const response = await this.graphClient.resources(
+        {
+          ...(input.subscriptionIds.length > 0
+            ? { subscriptions: [...input.subscriptionIds] }
+            : {}),
+          query: input.query,
+          options: {
+            top: input.top,
+            resultFormat: 'objectArray',
+            ...(input.skipToken ? { skipToken: input.skipToken } : {}),
+          },
         },
-      });
+        this.operationOptions(input.signal),
+      );
 
       const data: unknown = response.data;
       const rows = Array.isArray(data) ? (data as Record<string, unknown>[]) : [];
@@ -269,6 +288,7 @@ export class AzureSdkProvider implements AzureProvider {
           $filter: filters.join(' and '),
           $top: input.top,
         },
+        signal: input.signal,
       },
     );
 
@@ -294,6 +314,7 @@ export class AzureSdkProvider implements AzureProvider {
           timespan: { startTime: input.since, endTime: input.until },
           granularity: input.intervalIso8601,
           aggregations: [input.aggregation],
+          ...this.operationOptions(input.signal),
         },
       );
 
@@ -311,33 +332,39 @@ export class AzureSdkProvider implements AzureProvider {
     }
   }
 
-  public async restartVirtualMachine(ref: ResourceRef): Promise<void> {
+  public async restartVirtualMachine(ref: ResourceRef, signal?: AbortSignal): Promise<void> {
     try {
       const poller = this.compute(ref.subscriptionId).virtualMachines.restart(
         ref.resourceGroup,
         ref.name,
+        this.operationOptions(signal),
       );
-      await poller.pollUntilDone();
+      await poller.pollUntilDone(this.operationOptions(signal));
     } catch (error) {
       throw mapAzureError(error, `restart virtual machine ${ref.name}`);
     }
   }
 
-  public async startVirtualMachine(ref: ResourceRef): Promise<void> {
+  public async startVirtualMachine(ref: ResourceRef, signal?: AbortSignal): Promise<void> {
     try {
       const poller = this.compute(ref.subscriptionId).virtualMachines.start(
         ref.resourceGroup,
         ref.name,
+        this.operationOptions(signal),
       );
-      await poller.pollUntilDone();
+      await poller.pollUntilDone(this.operationOptions(signal));
     } catch (error) {
       throw mapAzureError(error, `start virtual machine ${ref.name}`);
     }
   }
 
-  public async restartWebApp(ref: ResourceRef): Promise<void> {
+  public async restartWebApp(ref: ResourceRef, signal?: AbortSignal): Promise<void> {
     try {
-      await this.web(ref.subscriptionId).webApps.restart(ref.resourceGroup, ref.name);
+      await this.web(ref.subscriptionId).webApps.restart(
+        ref.resourceGroup,
+        ref.name,
+        this.operationOptions(signal),
+      );
     } catch (error) {
       throw mapAzureError(error, `restart web app ${ref.name}`);
     }
@@ -346,6 +373,7 @@ export class AzureSdkProvider implements AzureProvider {
   public async setResourceTags(
     resourceId: string,
     tags: Readonly<Record<string, string>>,
+    signal?: AbortSignal,
   ): Promise<AzureResource> {
     const subscriptionId = subscriptionIdFromResourceId(resourceId);
     if (!subscriptionId) {
@@ -356,16 +384,20 @@ export class AzureSdkProvider implements AzureProvider {
     }
 
     try {
-      const poller = this.resources(subscriptionId).tagsOperations.updateAtScope(resourceId, {
-        operation: 'Merge',
-        properties: { tags: { ...tags } },
-      });
-      await poller.pollUntilDone();
+      const poller = this.resources(subscriptionId).tagsOperations.updateAtScope(
+        resourceId,
+        {
+          operation: 'Merge',
+          properties: { tags: { ...tags } },
+        },
+        this.operationOptions(signal),
+      );
+      await poller.pollUntilDone(this.operationOptions(signal));
     } catch (error) {
       throw mapAzureError(error, `update tags on ${resourceId}`);
     }
 
-    return this.getResourceById(resourceId);
+    return this.getResourceById(resourceId, signal);
   }
 
   /* ----------------------------------------------------------- deployments */
@@ -373,8 +405,9 @@ export class AzureSdkProvider implements AzureProvider {
   public getEffectivePermissions(
     armScope: string,
     identity: 'operator' | 'deployment',
+    signal?: AbortSignal,
   ): Promise<readonly EffectivePermission[]> {
-    return this.clientFor(identity).effectivePermissions(armScope);
+    return this.clientFor(identity).effectivePermissions(armScope, signal);
   }
 
   public whatIfDeployment(request: ArmDeploymentRequest): Promise<ArmWhatIfResult> {
@@ -388,16 +421,18 @@ export class AzureSdkProvider implements AzureProvider {
   public getDeployment(
     scope: DeploymentScope,
     deploymentName: string,
+    signal?: AbortSignal,
   ): Promise<ArmDeploymentStatus> {
-    return this.deploymentDeployments.get(scope, deploymentName);
+    return this.deploymentDeployments.get(scope, deploymentName, signal);
   }
 
   public listDeploymentOperations(
     scope: DeploymentScope,
     deploymentName: string,
     options: { readonly top: number; readonly skipToken: string | undefined },
+    signal?: AbortSignal,
   ): Promise<ArmDeploymentOperationPage> {
-    return this.deploymentDeployments.listOperations(scope, deploymentName, options);
+    return this.deploymentDeployments.listOperations(scope, deploymentName, options, signal);
   }
 
   private clientFor(identity: 'operator' | 'deployment'): ArmDeploymentClient {

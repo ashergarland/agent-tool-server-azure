@@ -70,7 +70,8 @@ ARG GIT_SHA=unknown
 ARG SERVICE_VERSION=0.0.0
 ENV GIT_SHA=${GIT_SHA} \
     SERVICE_VERSION=${SERVICE_VERSION} \
-    BICEP_CLI_PATH=/usr/local/bin/bicep
+    BICEP_CLI_PATH=/usr/local/bin/bicep \
+    DOTNET_BUNDLE_EXTRACT_BASE_DIR=/tmp/dotnet-bundle
 
 LABEL org.opencontainers.image.source="https://github.com/ashergarland/agent-tool-server-azure" \
       org.opencontainers.image.revision="${GIT_SHA}" \

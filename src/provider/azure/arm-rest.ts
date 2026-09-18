@@ -1,5 +1,5 @@
 import type { TokenCredential } from '@azure/core-auth';
-import { AppError } from '../../errors.js';
+import { AppError } from '@agent-tool-platform/runtime/errors';
 import { mapAzureError } from './errors.js';
 
 export interface ArmRequestOptions {
@@ -71,9 +71,9 @@ export class ArmRestClient {
     private readonly maxResponseBytes: number = DEFAULT_MAX_RESPONSE_BYTES,
   ) {}
 
-  private async authorizationHeader(): Promise<string> {
+  private async authorizationHeader(signal: AbortSignal): Promise<string> {
     const scope = `${this.endpoint.replace(/\/$/, '')}/.default`;
-    const token = await this.credential.getToken(scope);
+    const token = await this.credential.getToken(scope, { abortSignal: signal });
     if (!token) {
       throw new AppError('upstream_error', 'Unable to acquire an Azure ARM access token');
     }
@@ -91,18 +91,20 @@ export class ArmRestClient {
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(),
-      options.timeoutMs ?? this.defaultTimeoutMs,
+    const enabledTimeouts = [this.defaultTimeoutMs, options.timeoutMs].filter(
+      (candidate): candidate is number => candidate !== undefined && candidate > 0,
     );
-    const onAbort = (): void => controller.abort();
-    options.signal?.addEventListener('abort', onAbort, { once: true });
+    const timeoutMs = enabledTimeouts.length > 0 ? Math.min(...enabledTimeouts) : 0;
+    const timeout = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+    const onAbort = (): void => controller.abort(options.signal?.reason);
+    if (options.signal?.aborted) onAbort();
+    else options.signal?.addEventListener('abort', onAbort, { once: true });
 
     try {
       const response = await fetch(url, {
         method,
         headers: {
-          authorization: await this.authorizationHeader(),
+          authorization: await this.authorizationHeader(controller.signal),
           accept: 'application/json',
           ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
         },
@@ -138,7 +140,7 @@ export class ArmRestClient {
     } catch (error) {
       throw mapAzureError(error, `${method} ${url.pathname}`);
     } finally {
-      clearTimeout(timeout);
+      if (timeout !== undefined) clearTimeout(timeout);
       options.signal?.removeEventListener('abort', onAbort);
     }
   }

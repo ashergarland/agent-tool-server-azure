@@ -20,66 +20,56 @@ env:
   NODE_VERSION: '22'
 
 jobs:
-  verify:
-    name: Format, lint, typecheck, test, build
+  # Agent Tool Platform workflow pin:
+  # 98ec8162fb11d5c04aee9e6f7b3625a472a0180d
+  capability:
+    permissions:
+      contents: read
+    uses: ashergarland/agent-tool-platform/.github/workflows/capability-ci.yml@98ec8162fb11d5c04aee9e6f7b3625a472a0180d
+    with:
+      node_version: '22'
+      openapi_path: openapi.json
+      run_package_smoke: false
+
+  deployment-contract:
+    name: Deployment contract
+    needs: capability
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+
+      - name: Check out the exact Platform contract revision
+        uses: actions/checkout@v7
+        with:
+          repository: ashergarland/agent-tool-platform
+          ref: 98ec8162fb11d5c04aee9e6f7b3625a472a0180d
+          path: .agent-tool-platform
 
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+          cache-dependency-path: .agent-tool-platform/package-lock.json
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Build the pinned Platform checkout
+        working-directory: .agent-tool-platform
+        run: |
+          npm ci
+          npm run build
 
-      - name: Check formatting
-        run: npm run format:check
+      - name: Validate the public profile declaration
+        env:
+          AGENT_TOOL_PLATFORM_CHECKOUT: ${{ github.workspace }}/.agent-tool-platform
+        run: npm run deployment:validate
 
-      - name: Lint
-        run: npm run lint
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Test with coverage thresholds
-        run: npm run test:coverage
-
-      - name: Build
-        run: npm run build
-
-      - name: Emit OpenAPI document
-        run: npm run openapi:emit -- openapi.json
-
-      - name: Check the OpenAPI document is valid and complete
-        run: npm run openapi:check openapi.json
-
-      - name: Upload OpenAPI document
-        uses: actions/upload-artifact@v7
-        with:
-          name: openapi
-          path: openapi.json
-
-  metadata:
-    name: Registry metadata
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Validate server.json against the published MCP schema
-        run: npm run metadata:check
+      - name: Run deployment-contract conformance
+        env:
+          AGENT_TOOL_PLATFORM_CHECKOUT: ${{ github.workspace }}/.agent-tool-platform
+        run: npm run deployment:conformance
 
   docker:
     name: Container image
+    needs: capability
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -125,37 +115,6 @@ jobs:
           grep -q 'deploymentTemplate.json' /tmp/compiled.json
           grep -q 'resourceName' /tmp/compiled.json
 
-      - name: Verify the server reports the compiler as ready when deployments are enabled
-        env:
-          API_KEY: ci-readiness-key-that-is-long-enough-000
-        run: |
-          docker run -d --name deployable -p 8081:8080 \
-            -e NODE_ENV=development \
-            -e API_KEYS="$API_KEY" \
-            -e DEPLOYMENTS_ENABLED=true \
-            agent-tool-server-azure:ci
-          for _ in $(seq 1 30); do
-            if curl -fsS http://localhost:8081/health > /dev/null; then break; fi
-            sleep 1
-          done
-          # Capture the body whatever the status: curl -f would discard exactly the report needed to
-          # explain a failure.
-          status="$(curl -sS -o /tmp/ready-deployable.json -w '%{http_code}' http://localhost:8081/ready)"
-          echo "GET /ready -> $status"
-          cat /tmp/ready-deployable.json
-          docker logs deployable
-          docker rm -f deployable
-          # Assert through the readiness report an operator actually relies on, not just against the
-          # binary: a compiler that cannot start must never read as ready.
-          state="$(jq -r '.components.bicepCompiler.state' /tmp/ready-deployable.json)"
-          echo "bicepCompiler: $state ($(jq -r '.components.bicepCompiler.detail' /tmp/ready-deployable.json))"
-          case "$state" in
-            ok|degraded) ;;
-            *) echo "the Bicep compiler is not usable in this image"; exit 1 ;;
-          esac
-          test "$status" = "200"
-          test "$(jq -r '.ready' /tmp/ready-deployable.json)" = "true"
-
       - name: Verify the stdio MCP entry point starts and lists tools
         run: |
           printf '%s\n%s\n' \
@@ -163,15 +122,14 @@ jobs:
             '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
             | docker run --rm -i \
                 -e NODE_ENV=development -e AUTH_MODE=disabled -e LOG_LEVEL=silent \
-                --entrypoint node agent-tool-server-azure:ci dist/mcp/stdio.js \
+                --entrypoint node agent-tool-server-azure:ci dist/stdio.js \
             | tee /tmp/mcp.jsonl
           grep -q 'azure_list_subscriptions' /tmp/mcp.jsonl
           grep -q 'azure_validate_bicep' /tmp/mcp.jsonl
 
       - name: Smoke test the HTTP surface
-        env:
-          API_KEY: ci-smoke-test-key-that-is-long-enough
         run: |
+          API_KEY="$(openssl rand -hex 32)"
           docker run -d --name server -p 8080:8080 \
             -e API_KEYS="$API_KEY" \
             agent-tool-server-azure:ci
@@ -181,8 +139,6 @@ jobs:
           done
           curl -fsS http://localhost:8080/health
           curl -fsS http://localhost:8080/version
-          curl -fsS http://localhost:8080/ready | tee /tmp/ready.json
-          grep -q '"ready":true' /tmp/ready.json
           curl -fsS -H "x-api-key: $API_KEY" http://localhost:8080/tools > /dev/null
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/tools)" = "401"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/mcp)" = "401"

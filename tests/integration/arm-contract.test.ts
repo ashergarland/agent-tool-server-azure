@@ -71,6 +71,13 @@ describe('ARM wire contract', () => {
   });
 
   describe('request construction', () => {
+    it('treats a zero default timeout as disabled', async () => {
+      stub.respond(() => ({ body: {}, delayMs: 20 }));
+      rest = new ArmRestClient(stubCredential(), stub.origin, 0);
+
+      await expect(rest.get('/subscriptions')).resolves.toEqual({});
+    });
+
     it('sends a bearer token and the JSON content type', async () => {
       await client.get(scopes.resourceGroup, 'dep-1');
       const request = stub.requests[0];
@@ -163,6 +170,43 @@ describe('ARM wire contract', () => {
   });
 
   describe('what-if long-running operation', () => {
+    it('applies the what-if domain timeout to the initial ARM request', async () => {
+      stub.respond(() => ({ body: { status: 'Succeeded' }, delayMs: 50 }));
+      client = new ArmDeploymentClient(rest, {
+        whatIfTimeoutMs: 10,
+        pollIntervalMs: 1,
+        armEndpoint: stub.origin,
+      });
+
+      await expect(
+        client.whatIf({
+          scope: scopes.resourceGroup,
+          deploymentName: 'dep-1',
+          template: TEMPLATE,
+          parameters: {},
+        }),
+      ).rejects.toMatchObject({ code: 'timeout' });
+    });
+
+    it('retains the shorter ARM transport timeout inside the what-if budget', async () => {
+      stub.respond(() => ({ body: { status: 'Succeeded' }, delayMs: 50 }));
+      rest = new ArmRestClient(stubCredential(), stub.origin, 10);
+      client = new ArmDeploymentClient(rest, {
+        whatIfTimeoutMs: 5_000,
+        pollIntervalMs: 1,
+        armEndpoint: stub.origin,
+      });
+
+      await expect(
+        client.whatIf({
+          scope: scopes.resourceGroup,
+          deploymentName: 'dep-1',
+          template: TEMPLATE,
+          parameters: {},
+        }),
+      ).rejects.toMatchObject({ code: 'timeout' });
+    });
+
     it('follows the 202 poll location until the operation settles', async () => {
       await stub.close();
       await build((_request, index) => {
