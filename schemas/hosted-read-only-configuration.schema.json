@@ -17,6 +17,9 @@
         "MUTATIONS_ENABLED": {
           "$ref": "#/$defs/falseBooleanish"
         },
+        "DEPLOYMENTS_ENABLED": {
+          "$ref": "#/$defs/falseBooleanish"
+        },
         "MUTATION_CONFIRMATION_REQUIRED": {
           "$ref": "#/$defs/trueBooleanish"
         },
@@ -24,7 +27,7 @@
           "$ref": "#/$defs/falseTrustProxy"
         }
       },
-      "required": ["MUTATIONS_ENABLED", "MUTATION_CONFIRMATION_REQUIRED"]
+      "required": ["MUTATIONS_ENABLED", "DEPLOYMENTS_ENABLED", "MUTATION_CONFIRMATION_REQUIRED"]
     }
   ],
   "unevaluatedProperties": false,

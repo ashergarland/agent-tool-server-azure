@@ -580,6 +580,7 @@ export class DeploymentService {
     reason: string,
     requestId: string,
     signal?: AbortSignal,
+    authorizedScope?: DeploymentScope,
   ): Promise<DeployResult> {
     const deploymentName = `atsa-${record.id}`.slice(0, 64);
 
@@ -608,13 +609,18 @@ export class DeploymentService {
                 `This preview is in state ${current.status} and cannot be deployed again.`,
               );
             }
+            const submissionScope = authorizedScope ?? current.scope;
+            const submissionScopeKey = scopeKeyOf(submissionScope);
+            if (submissionScopeKey !== record.scopeKey || submissionScopeKey !== current.scopeKey) {
+              throw conflict('The approved deployment scope no longer matches its durable record.');
+            }
 
             const resumingUncertainSubmission = current.status === 'submitting';
             let submitted = current;
             if (resumingUncertainSubmission) {
               try {
                 const existing = await this.deps.provider.getDeployment(
-                  current.scope,
+                  submissionScope,
                   deploymentName,
                   leaseSignal,
                 );
@@ -666,10 +672,10 @@ export class DeploymentService {
             try {
               started = await this.deps.metrics.time(
                 'arm_deploy_start_ms',
-                { scope: current.scope.kind },
+                { scope: submissionScope.kind },
                 () =>
                   this.deps.provider.beginDeployment({
-                    scope: current.scope,
+                    scope: submissionScope,
                     deploymentName,
                     template,
                     parameters: toArmParameters(parameters),
@@ -677,16 +683,25 @@ export class DeploymentService {
                   }),
               );
             } catch (error) {
+              const leaseLost = leaseSignal.aborted;
               await this.recordSubmissionFailure(
                 submitted,
                 error,
                 requestId,
-                !resumingUncertainSubmission,
+                !resumingUncertainSubmission && !leaseLost,
               );
+              if (leaseLost) {
+                throw conflict(
+                  'The distributed deployment lease was lost while Azure submission acceptance ' +
+                    'was uncertain. Retry the exact approved deployment to reconcile its ' +
+                    'deterministic deployment name.',
+                  { recordId: submitted.id, deploymentName },
+                );
+              }
               throw error;
             }
             this.deps.metrics.increment('deployments_started_total', {
-              scope: current.scope.kind,
+              scope: submissionScope.kind,
             });
             this.audit('deployment.accepted', submitted, {
               deploymentName,
@@ -786,6 +801,39 @@ export class DeploymentService {
 
   /* ----------------------------------------------------------------- status */
 
+  private resolveStoredScope(record: DeploymentRecord): DeploymentScope {
+    const scope = this.deps.guardrails.resolveDeploymentScope({
+      kind: record.scope.kind,
+      subscriptionId: record.scope.subscriptionId,
+      resourceGroup: record.scope.resourceGroup,
+      managementGroupId: record.scope.managementGroupId,
+      location: record.scope.location,
+    });
+    if (
+      scopeKeyOf(scope) !== record.scopeKey ||
+      scope.armScope.toLowerCase() !== record.scope.armScope.toLowerCase()
+    ) {
+      throw conflict(`Deployment record ${record.id} contains an inconsistent scope.`);
+    }
+    return scope;
+  }
+
+  private authorizeRollbackRecord(
+    record: DeploymentRecord,
+  ): DeploymentRecord & { readonly template: Record<string, unknown> } {
+    if (!record.template) {
+      throw badRequest(`Record ${record.id} does not retain a template and cannot be redeployed.`);
+    }
+    const scope = this.resolveStoredScope(record);
+    const inspection = inspectTemplate(record.template, this.deps.config.bicep.inspectionLimits);
+    if (inspection.templateHash !== record.templateHash) {
+      throw conflict(`Deployment record ${record.id} contains an inconsistent template.`);
+    }
+    this.deps.guardrails.assertTemplateScopeMatches(inspection.templateScope, scope);
+    this.deps.guardrails.assertCrossScopeTargetsAllowed(inspection.crossScopeTargets);
+    return { ...record, scope, template: record.template };
+  }
+
   private async resolveTarget(
     input: {
       readonly recordId?: string | undefined;
@@ -809,7 +857,11 @@ export class DeploymentService {
           `Record ${record.id} is a preview that was never deployed, so it has no Azure status.`,
         );
       }
-      return { scope: record.scope, deploymentName: record.armDeploymentName, record };
+      return {
+        scope: this.resolveStoredScope(record),
+        deploymentName: record.armDeploymentName,
+        record,
+      };
     }
 
     if (!input.scope || !input.deploymentName) {
@@ -978,18 +1030,16 @@ export class DeploymentService {
     });
 
     assertNotCancelled(signal);
-    const target = await this.deps.store.get(input.recordId, principal, signal);
+    const storedTarget = await this.deps.store.get(input.recordId, principal, signal);
     assertNotCancelled(signal);
-    if (!target) throw notFound(`No deployment record ${input.recordId} for this caller`);
-    if (target.status !== 'succeeded') {
+    if (!storedTarget) throw notFound(`No deployment record ${input.recordId} for this caller`);
+    if (storedTarget.status !== 'succeeded') {
       throw badRequest(
-        `Record ${target.id} is in state ${target.status}. Only a previously successful ` +
+        `Record ${storedTarget.id} is in state ${storedTarget.status}. Only a previously successful ` +
           'deployment can be redeployed.',
       );
     }
-    if (!target.template) {
-      throw badRequest(`Record ${target.id} does not retain a template and cannot be redeployed.`);
-    }
+    const target = this.authorizeRollbackRecord(storedTarget);
 
     const parameters = this.rebuildParameters(target, input.secureParameters);
 
@@ -1050,16 +1100,41 @@ export class DeploymentService {
       throw badRequest('azure_rollback_deployment requires a reason.');
     }
 
+    assertNotCancelled(signal);
+    const refreshedTarget = await this.deps.store.get(target.id, principal, signal);
+    assertNotCancelled(signal);
+    if (!refreshedTarget) {
+      throw conflict('The rollback target disappeared before the operation was admitted.');
+    }
+    if (refreshedTarget.status !== 'succeeded') {
+      throw conflict(
+        `The rollback target changed to ${refreshedTarget.status} before the operation was admitted.`,
+      );
+    }
+    const currentTarget = this.authorizeRollbackRecord(refreshedTarget);
+    const confirmedScope = this.resolveStoredScope(record);
+    if (
+      scopeKeyOf(confirmedScope) !== currentTarget.scopeKey ||
+      record.templateHash !== currentTarget.templateHash ||
+      record.sourceHash !== currentTarget.sourceHash
+    ) {
+      throw conflict(
+        'The rollback preview no longer matches the currently authorized deployment record. ' +
+          'Produce a new rollback preview.',
+      );
+    }
+
     return {
       phase: 'deployed',
       rollbackOf: target.id,
       result: await this.start(
         record,
-        target.template,
+        currentTarget.template,
         parameters,
         input.reason,
         requestId,
         signal,
+        confirmedScope,
       ),
     };
   }

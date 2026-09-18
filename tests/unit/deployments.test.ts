@@ -4,6 +4,11 @@ import { badRequest, notFound } from '@agent-tool-platform/runtime/errors';
 import { DeploymentService } from '../../src/services/deployments.js';
 import { Guardrails } from '../../src/services/guardrails.js';
 import { InMemoryDeploymentRecordStore } from '../../src/deployments/store-memory.js';
+import {
+  DeploymentLeaseLostError,
+  type DeploymentRecordStore,
+} from '../../src/deployments/records.js';
+import { mapAzureError } from '../../src/provider/azure/errors.js';
 import { Metrics } from '../../src/util/metrics.js';
 import { testConfig } from '../helpers/config.js';
 import { createFakeCompiler, RG_TEMPLATE, SUBSCRIPTION_TEMPLATE } from '../helpers/bicep.js';
@@ -37,11 +42,49 @@ const whatIfResult = (changes: ArmWhatIfResult['changes'] = []): ArmWhatIfResult
   error: undefined,
 });
 
-const setup = (overrides: Record<string, string> = {}) => {
+interface SetupOptions {
+  readonly store?: DeploymentRecordStore;
+  readonly idPrefix?: string;
+}
+
+class ControlledLeaseStore extends InMemoryDeploymentRecordStore {
+  private lease: AbortController | undefined;
+
+  public loseLease(statusCode: number): void {
+    this.lease?.abort(
+      new DeploymentLeaseLostError(
+        'resourceGroup:/subscriptions/test/resourceGroups/rg-prod',
+        Object.assign(new Error(`table status ${statusCode}`), { statusCode }),
+      ),
+    );
+  }
+
+  public override withScopeLock<T>(
+    scopeKey: string,
+    run: (leaseSignal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return super.withScopeLock(
+      scopeKey,
+      async () => {
+        const lease = new AbortController();
+        this.lease = lease;
+        try {
+          return await run(lease.signal);
+        } finally {
+          this.lease = undefined;
+        }
+      },
+      signal,
+    );
+  }
+}
+
+const setup = (overrides: Record<string, string> = {}, options: SetupOptions = {}) => {
   const config = testConfig({ ...DEPLOYMENT_ENV, ...overrides });
   const provider = createFakeProvider();
   const compiler = createFakeCompiler();
-  const store = new InMemoryDeploymentRecordStore();
+  const store = options.store ?? new InMemoryDeploymentRecordStore();
   let clock = Date.parse('2026-01-01T00:00:00.000Z');
   let counter = 0;
   const logger = createTestLogger();
@@ -55,7 +98,7 @@ const setup = (overrides: Record<string, string> = {}) => {
     logger: logger as unknown as Logger,
     metrics: new Metrics(),
     now: () => new Date(clock),
-    newId: () => `id-${(counter += 1)}`,
+    newId: () => `${options.idPrefix ?? 'id'}-${(counter += 1)}`,
   });
 
   return {
@@ -642,6 +685,63 @@ describe('DeploymentService.deploy', () => {
     );
   });
 
+  it.each([401, 429])(
+    'keeps a Table %i lease failure uncertain and later reconciles provider state',
+    async (statusCode) => {
+      const store = new ControlledLeaseStore();
+      const harness = setup({}, { store });
+      const preview = await harness.service.whatIf(
+        { bundle, parameters: {}, scope: rgScope },
+        PRINCIPAL,
+        'preview',
+      );
+      harness.provider.beginDeployment = vi.fn((request: ArmDeploymentRequest) => {
+        store.loseLease(statusCode);
+        if (!request.signal) throw new Error('expected the lease signal');
+        return Promise.reject(mapAzureError(request.signal.reason, 'begin ARM deployment'));
+      });
+
+      await expect(
+        harness.service.deploy(
+          {
+            bundle,
+            parameters: {},
+            scope: rgScope,
+            confirmationHash: preview.confirmationHash,
+            confirm: true,
+            reason: 'lease loss',
+          },
+          PRINCIPAL,
+          'deploy',
+        ),
+      ).rejects.toMatchObject({ code: 'conflict' });
+
+      await expect(store.get(preview.previewId, PRINCIPAL)).resolves.toMatchObject({
+        status: 'submitting',
+        error: { code: 'submission_uncertain' },
+      });
+
+      harness.provider.getDeployment = vi.fn(() =>
+        Promise.resolve({
+          id: '/subscriptions/x/providers/Microsoft.Resources/deployments/reconciled',
+          name: `atsa-${preview.previewId}`,
+          provisioningState: 'Succeeded',
+          correlationId: 'reconciled',
+          timestamp: undefined,
+          duration: undefined,
+          outputs: undefined,
+          error: undefined,
+        }),
+      );
+      await expect(
+        harness.service.getDeployment({ recordId: preview.previewId }, PRINCIPAL),
+      ).resolves.toMatchObject({ provisioningState: 'Succeeded' });
+      await expect(store.get(preview.previewId, PRINCIPAL)).resolves.toMatchObject({
+        status: 'succeeded',
+      });
+    },
+  );
+
   it('terminalizes a definitive ARM submission rejection', async () => {
     const harness = setup();
     const preview = await harness.service.whatIf(
@@ -1154,6 +1254,18 @@ describe('DeploymentService.getDeployment', () => {
       /Supply either recordId/,
     );
   });
+
+  it('rejects a record whose persisted scope no longer matches its scope key', async () => {
+    const harness = setup();
+    const { result } = await previewAndDeploy(harness);
+    const record = await harness.store.get(result.recordId, PRINCIPAL);
+    if (!record) throw new Error('expected a deployment record');
+    await harness.store.put({ ...record, scopeKey: 'resourceGroup:tampered' });
+
+    await expect(
+      harness.service.getDeployment({ recordId: result.recordId }, PRINCIPAL),
+    ).rejects.toThrowError(/contains an inconsistent scope/);
+  });
 });
 
 describe('DeploymentService.rollback', () => {
@@ -1189,6 +1301,213 @@ describe('DeploymentService.rollback', () => {
       'r',
     );
     expect(applied.phase).toBe('deployed');
+  });
+
+  it('reapplies a narrowed scope policy to reads, preview, and confirmed rollback', async () => {
+    const store = new InMemoryDeploymentRecordStore();
+    const original = setup({}, { store });
+    const recordId = await succeed(original);
+    const preview = await original.service.rollback(
+      { recordId, confirm: false, reason: 'revert' },
+      PRINCIPAL,
+      'preview',
+    );
+    if (preview.phase !== 'preview') throw new Error('expected a preview');
+
+    const narrowed = setup(
+      { AZURE_ALLOWED_RESOURCE_GROUPS: 'rg-other' },
+      { store, idPrefix: 'narrowed' },
+    );
+    await expect(narrowed.service.getDeployment({ recordId }, PRINCIPAL)).rejects.toThrowError(
+      /outside the server's allow-list/,
+    );
+    await expect(
+      narrowed.service.listOperations({ recordId, limit: 10 }, PRINCIPAL),
+    ).rejects.toThrowError(/outside the server's allow-list/);
+    await expect(
+      narrowed.service.rollback(
+        { recordId, confirm: false, reason: 'revert' },
+        PRINCIPAL,
+        'preview',
+      ),
+    ).rejects.toThrowError(/outside the server's allow-list/);
+    await expect(
+      narrowed.service.rollback(
+        {
+          recordId,
+          confirm: true,
+          confirmationHash: preview.preview.confirmationHash,
+          reason: 'revert',
+        },
+        PRINCIPAL,
+        'deploy',
+      ),
+    ).rejects.toThrowError(/outside the server's allow-list/);
+    expect(narrowed.provider.calls.filter((call) => call.name === 'beginDeployment')).toHaveLength(
+      0,
+    );
+  });
+
+  it('reinspects stored templates under a newly denied resource policy', async () => {
+    const store = new InMemoryDeploymentRecordStore();
+    const original = setup({}, { store });
+    const recordId = await succeed(original);
+    const preview = await original.service.rollback(
+      { recordId, confirm: false, reason: 'revert' },
+      PRINCIPAL,
+      'preview',
+    );
+    if (preview.phase !== 'preview') throw new Error('expected a preview');
+
+    const narrowed = setup(
+      { BICEP_DENIED_RESOURCE_TYPES: 'microsoft.storage/storageaccounts' },
+      { store, idPrefix: 'denied' },
+    );
+    await expect(
+      narrowed.service.rollback(
+        { recordId, confirm: false, reason: 'revert' },
+        PRINCIPAL,
+        'preview',
+      ),
+    ).rejects.toThrowError(/not permitted by this server's deployment policy/);
+    await expect(
+      narrowed.service.rollback(
+        {
+          recordId,
+          confirm: true,
+          confirmationHash: preview.preview.confirmationHash,
+          reason: 'revert',
+        },
+        PRINCIPAL,
+        'deploy',
+      ),
+    ).rejects.toThrowError(/not permitted by this server's deployment policy/);
+  });
+
+  it('rejects a stored rollback target whose template no longer matches its hash', async () => {
+    const harness = setup();
+    const recordId = await succeed(harness);
+    const record = await harness.store.get(recordId, PRINCIPAL);
+    if (!record) throw new Error('expected a deployment record');
+    await harness.store.put({
+      ...record,
+      template: { ...RG_TEMPLATE, resources: [] },
+    });
+
+    await expect(
+      harness.service.rollback(
+        { recordId, confirm: false, reason: 'revert' },
+        PRINCIPAL,
+        'preview',
+      ),
+    ).rejects.toThrowError(/contains an inconsistent template/);
+  });
+
+  it('rejects a confirmed rollback preview that diverges from its target record', async () => {
+    const harness = setup();
+    const recordId = await succeed(harness);
+    const preview = await harness.service.rollback(
+      { recordId, confirm: false, reason: 'revert' },
+      PRINCIPAL,
+      'preview',
+    );
+    if (preview.phase !== 'preview') throw new Error('expected a preview');
+    const previewRecord = await harness.store.get(preview.preview.previewId, PRINCIPAL);
+    if (!previewRecord) throw new Error('expected a rollback preview record');
+    await harness.store.put({ ...previewRecord, templateHash: 'diverged-template' });
+
+    await expect(
+      harness.service.rollback(
+        {
+          recordId,
+          confirm: true,
+          confirmationHash: preview.preview.confirmationHash,
+          reason: 'revert',
+        },
+        PRINCIPAL,
+        'deploy',
+      ),
+    ).rejects.toThrowError(/no longer matches the currently authorized deployment record/);
+    expect(harness.provider.calls.filter((call) => call.name === 'beginDeployment')).toHaveLength(
+      1,
+    );
+  });
+
+  it('reapplies narrowed cross-scope policy to stored rollback templates', async () => {
+    const store = new InMemoryDeploymentRecordStore();
+    const original = setup({ AZURE_SUBSCRIPTION_IDS: `${SUB_A},${SUB_B}` }, { store });
+    original.compiler.result = {
+      ...original.compiler.result,
+      template: {
+        ...RG_TEMPLATE,
+        resources: [
+          {
+            type: 'Microsoft.Resources/deployments',
+            apiVersion: '2024-03-01',
+            name: 'cross-subscription',
+            subscriptionId: SUB_B,
+            properties: { mode: 'Incremental', template: { resources: [] } },
+          },
+        ],
+      },
+    };
+    const recordId = await succeed(original);
+    const preview = await original.service.rollback(
+      { recordId, confirm: false, reason: 'revert' },
+      PRINCIPAL,
+      'preview',
+    );
+    if (preview.phase !== 'preview') throw new Error('expected a preview');
+
+    const narrowed = setup({}, { store, idPrefix: 'cross-scope' });
+    await expect(
+      narrowed.service.rollback(
+        { recordId, confirm: false, reason: 'revert' },
+        PRINCIPAL,
+        'preview',
+      ),
+    ).rejects.toThrowError(/outside the server's allow-list/);
+    await expect(
+      narrowed.service.rollback(
+        {
+          recordId,
+          confirm: true,
+          confirmationHash: preview.preview.confirmationHash,
+          reason: 'revert',
+        },
+        PRINCIPAL,
+        'deploy',
+      ),
+    ).rejects.toThrowError(/outside the server's allow-list/);
+  });
+
+  it('keeps rollback available when current policy explicitly broadens the stored scope', async () => {
+    const store = new InMemoryDeploymentRecordStore();
+    const original = setup({}, { store });
+    const recordId = await succeed(original);
+    const broadened = setup(
+      { AZURE_SUBSCRIPTION_IDS: `${SUB_A},${SUB_B}` },
+      { store, idPrefix: 'broadened' },
+    );
+
+    const preview = await broadened.service.rollback(
+      { recordId, confirm: false, reason: 'revert' },
+      PRINCIPAL,
+      'preview',
+    );
+    if (preview.phase !== 'preview') throw new Error('expected a preview');
+    await expect(
+      broadened.service.rollback(
+        {
+          recordId,
+          confirm: true,
+          confirmationHash: preview.preview.confirmationHash,
+          reason: 'revert',
+        },
+        PRINCIPAL,
+        'deploy',
+      ),
+    ).resolves.toMatchObject({ phase: 'deployed' });
   });
 
   it('reconciles and retries an uncertain rollback using its deterministic name', async () => {

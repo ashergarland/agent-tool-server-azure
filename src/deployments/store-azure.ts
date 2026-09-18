@@ -3,7 +3,7 @@ import { TableClient } from '@azure/data-tables';
 import type { TokenCredential } from '@azure/core-auth';
 import { AppError, conflict, internalError, timedOut } from '@agent-tool-platform/runtime/errors';
 import { azureSdkOperationOptions } from '../provider/azure/options.js';
-import { applyDeploymentRecordPatch } from './records.js';
+import { applyDeploymentRecordPatch, DeploymentLeaseLostError } from './records.js';
 import type {
   DeploymentRecord,
   DeploymentRecordPatch,
@@ -23,6 +23,10 @@ export interface AzureTableStoreOptions {
   readonly locksTable: string;
   readonly lockTtlMs: number;
   readonly requestTimeoutMs: number;
+}
+
+export interface AzureTableStoreLogger {
+  warn(context: Record<string, unknown>, message: string): void;
 }
 
 interface RecordEntity {
@@ -105,9 +109,27 @@ export class AzureTableDeploymentRecordStore implements DeploymentRecordStore {
   public constructor(
     credential: TokenCredential,
     private readonly options: AzureTableStoreOptions,
+    private readonly logger: AzureTableStoreLogger,
   ) {
     this.records = new TableClient(options.accountUrl, options.recordsTable, credential);
     this.locks = new TableClient(options.accountUrl, options.locksTable, credential);
+  }
+
+  private reportLockReleaseFailure(error: unknown, scopeKey: string): void {
+    try {
+      this.logger.warn(
+        {
+          err: error,
+          event: 'deployment.lock.release.failed',
+          scopeKey,
+        },
+        'distributed deployment lock release failed; TTL reclamation remains active',
+      );
+    } catch {
+      process.emitWarning('The distributed deployment lock release and its logger both failed.', {
+        code: 'AZURE_LOCK_RELEASE_LOG_FAILURE',
+      });
+    }
   }
 
   private async ensureTables(signal?: AbortSignal): Promise<void> {
@@ -320,25 +342,26 @@ export class AzureTableDeploymentRecordStore implements DeploymentRecordStore {
         expiresAt: new Date(Date.now() + this.options.lockTtlMs).toISOString(),
       };
       try {
-        const created = await awaitWithCancellation(
-          this.locks.createEntity(entity, operationOptions(signal)),
-          signal,
-        );
+        const created = await this.locks.createEntity(entity, operationOptions());
         if (created.etag) return created.etag;
-        return (await this.locks.getEntity<LockEntity>('lock', rowKey, operationOptions(signal)))
-          .etag;
+        const current = await this.locks.getEntity<LockEntity>('lock', rowKey, operationOptions());
+        if (current.ownerId !== ownerId) {
+          throw conflict(`The distributed deployment lock for ${scopeKey} changed owners.`);
+        }
+        return current.etag;
       } catch (error) {
         if (statusOf(error) !== 409) throw error;
         return undefined;
       }
     };
 
+    assertNotCancelled(signal);
     let lockEtag = await acquire();
     if (!lockEtag) {
       // A lock whose lease has expired belonged to a replica that died mid-deployment. Reclaim it
       // conditionally, then give up: two live callers must not both proceed.
       const existing = await this.locks
-        .getEntity<LockEntity>('lock', rowKey, operationOptions(signal))
+        .getEntity<LockEntity>('lock', rowKey, operationOptions())
         .catch((error: unknown) => {
           if (statusOf(error) === 404) return undefined;
           throw error;
@@ -346,7 +369,7 @@ export class AzureTableDeploymentRecordStore implements DeploymentRecordStore {
       if (existing && Date.parse(existing.expiresAt) < Date.now()) {
         try {
           await this.locks.deleteEntity('lock', rowKey, {
-            ...operationOptions(signal),
+            ...operationOptions(),
             etag: existing.etag,
           });
           lockEtag = await acquire();
@@ -356,6 +379,7 @@ export class AzureTableDeploymentRecordStore implements DeploymentRecordStore {
       }
     }
     if (!lockEtag) {
+      assertNotCancelled(signal);
       throw conflict(
         `Another deployment is already in progress for ${scopeKey}. Wait for it to finish before starting another.`,
       );
@@ -395,7 +419,7 @@ export class AzureTableDeploymentRecordStore implements DeploymentRecordStore {
           currentEtag = current.etag;
         }
       } catch (error) {
-        leaseController.abort(error);
+        leaseController.abort(new DeploymentLeaseLostError(scopeKey, error));
       }
     };
     const renewalTimer = setInterval(
@@ -406,26 +430,24 @@ export class AzureTableDeploymentRecordStore implements DeploymentRecordStore {
     );
 
     try {
+      assertNotCancelled(signal);
       return await run(leaseController.signal);
     } finally {
       stopped = true;
       clearInterval(renewalTimer);
       await renewalPending;
-      const current = await this.locks
-        .getEntity<LockEntity>('lock', rowKey, operationOptions())
-        .catch((error: unknown) => {
-          if (statusOf(error) === 404) return undefined;
-          throw error;
-        });
-      if (current?.ownerId === ownerId) {
-        await this.locks
-          .deleteEntity('lock', rowKey, {
+      try {
+        const current = await this.locks.getEntity<LockEntity>('lock', rowKey, operationOptions());
+        if (current.ownerId === ownerId) {
+          await this.locks.deleteEntity('lock', rowKey, {
             ...operationOptions(),
             etag: current.etag,
-          })
-          .catch((error: unknown) => {
-            if (statusOf(error) !== 404 && statusOf(error) !== 412) throw error;
           });
+        }
+      } catch (error) {
+        if (statusOf(error) !== 404 && statusOf(error) !== 412) {
+          this.reportLockReleaseFailure(error, scopeKey);
+        }
       }
     }
   }

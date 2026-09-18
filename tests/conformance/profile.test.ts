@@ -254,12 +254,16 @@ describe('Azure capability profile truthfulness', () => {
 
   it('mirrors hosted authentication, deployment, and remote-module startup invariants', async () => {
     const declaration = (await load('../../capability-profiles.json')) as Declaration;
-    const profile = declaration.profiles.find(({ id }) => id === 'hosted-read-only');
-    const validate = await compileProfileSchema(profile?.configuration.schema.path ?? '');
+    const readOnlyProfile = declaration.profiles.find(({ id }) => id === 'hosted-read-only');
+    const mutatingProfile = declaration.profiles.find(({ id }) => id === 'hosted-mutating');
+    const readOnly = await compileProfileSchema(readOnlyProfile?.configuration.schema.path ?? '');
+    const mutating = await compileProfileSchema(mutatingProfile?.configuration.schema.path ?? '');
 
-    expect(validate({ ...BASE_CONFIGURATION, AUTH_MODE: 'entra-jwt' })).toBe(false);
+    expect(readOnly(BASE_CONFIGURATION)).toBe(true);
+    expect(readOnly({ ...BASE_CONFIGURATION, DEPLOYMENTS_ENABLED: 'false' })).toBe(true);
+    expect(readOnly({ ...BASE_CONFIGURATION, AUTH_MODE: 'entra-jwt' })).toBe(false);
     expect(
-      validate({
+      readOnly({
         ...BASE_CONFIGURATION,
         AUTH_MODE: 'entra-jwt',
         ENTRA_TENANT_ID: 'tenant',
@@ -267,7 +271,7 @@ describe('Azure capability profile truthfulness', () => {
       }),
     ).toBe(false);
 
-    expect(validate({ ...BASE_CONFIGURATION, DEPLOYMENTS_ENABLED: 'true' })).toBe(false);
+    expect(readOnly({ ...BASE_CONFIGURATION, DEPLOYMENTS_ENABLED: 'true' })).toBe(false);
     const deployment = {
       ...BASE_CONFIGURATION,
       DEPLOYMENTS_ENABLED: 'true',
@@ -279,20 +283,23 @@ describe('Azure capability profile truthfulness', () => {
       DEPLOYMENT_RECORD_STORE: 'azure-table',
       DEPLOYMENT_RECORD_TABLE_ENDPOINT: 'https://example.table.core.windows.net',
     };
-    expect(validate(deployment)).toBe(true);
-    expect(validate({ ...deployment, REQUEST_TIMEOUT_MS: '30000' })).toBe(false);
+    expect(readOnly(deployment)).toBe(false);
+
+    const mutatingDeployment = { ...deployment, MUTATIONS_ENABLED: 'true' };
+    expect(mutating(mutatingDeployment)).toBe(true);
+    expect(mutating({ ...mutatingDeployment, REQUEST_TIMEOUT_MS: '30000' })).toBe(false);
     const { AZURE_CLIENT_ID: _operatorClientId, ...withoutOperatorIdentity } = deployment;
-    expect(validate(withoutOperatorIdentity)).toBe(false);
-    expect(validate({ ...deployment, DEPLOYMENT_RECORD_STORE: 'memory' })).toBe(false);
-    expect(validate({ ...deployment, BICEP_REMOTE_MODULES_ENABLED: 'true' })).toBe(false);
+    expect(mutating({ ...withoutOperatorIdentity, MUTATIONS_ENABLED: 'true' })).toBe(false);
+    expect(mutating({ ...mutatingDeployment, DEPLOYMENT_RECORD_STORE: 'memory' })).toBe(false);
+    expect(mutating({ ...mutatingDeployment, BICEP_REMOTE_MODULES_ENABLED: 'true' })).toBe(false);
     expect(
-      validate({
-        ...deployment,
+      mutating({
+        ...mutatingDeployment,
         BICEP_REMOTE_MODULES_ENABLED: 'true',
         BICEP_ALLOWED_REGISTRIES: 'contoso.azurecr.io',
       }),
     ).toBe(true);
-    expect(validate({ ...deployment, BICEP_TEMPLATE_SPECS_ENABLED: 'YES' })).toBe(false);
+    expect(mutating({ ...mutatingDeployment, BICEP_TEMPLATE_SPECS_ENABLED: 'YES' })).toBe(false);
   });
 
   it('contains no operator deployment instance, secret value, or account identifier', async () => {

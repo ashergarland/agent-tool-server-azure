@@ -133,6 +133,16 @@ export interface DeploymentStoreInfo {
   readonly detail: string | undefined;
 }
 
+/** Status-free reason used when the distributed scope lease can no longer be proven held. */
+export class DeploymentLeaseLostError extends Error {
+  public readonly code = 'LEASE_LOST';
+
+  public constructor(scopeKey: string, cause: unknown) {
+    super(`The distributed deployment lease for ${scopeKey} was lost`, { cause });
+    this.name = 'DeploymentLeaseLostError';
+  }
+}
+
 /**
  * Port for deployment records. The in-memory implementation backs local development and tests; the
  * Azure implementation keeps records outside the container so a scale-to-zero app loses nothing.

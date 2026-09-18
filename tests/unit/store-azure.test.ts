@@ -13,7 +13,10 @@ const tableError = (statusCode: number): Error & { statusCode: number } =>
 
 class FakeTable {
   public readonly entities = new Map<string, StoredEntity>();
+  public afterCreate: ((entity: Readonly<Record<string, unknown>>) => Promise<void>) | undefined;
   public beforeUpdate: ((entity: Readonly<Record<string, unknown>>) => Promise<void>) | undefined;
+  public beforeGet: ((partitionKey: string, rowKey: string) => Promise<void>) | undefined;
+  public beforeDelete: ((partitionKey: string, rowKey: string) => Promise<void>) | undefined;
   private version = 0;
 
   private key(partitionKey: string, rowKey: string): string {
@@ -29,14 +32,15 @@ class FakeTable {
     return Promise.resolve();
   }
 
-  public createEntity(entity: Record<string, unknown>): Promise<{ etag: string }> {
+  public async createEntity(entity: Record<string, unknown>): Promise<{ etag: string }> {
     const partitionKey = String(entity['partitionKey']);
     const rowKey = String(entity['rowKey']);
     const key = this.key(partitionKey, rowKey);
-    if (this.entities.has(key)) return Promise.reject(tableError(409));
+    if (this.entities.has(key)) throw tableError(409);
     const etag = this.nextEtag();
     this.entities.set(key, { ...entity, partitionKey, rowKey, etag });
-    return Promise.resolve({ etag });
+    await this.afterCreate?.(entity);
+    return { etag };
   }
 
   public upsertEntity(entity: Record<string, unknown>): Promise<void> {
@@ -68,22 +72,24 @@ class FakeTable {
     return { etag };
   }
 
-  public getEntity(partitionKey: string, rowKey: string): Promise<StoredEntity> {
+  public async getEntity(partitionKey: string, rowKey: string): Promise<StoredEntity> {
+    await this.beforeGet?.(partitionKey, rowKey);
     const entity = this.entities.get(this.key(partitionKey, rowKey));
-    return entity ? Promise.resolve({ ...entity }) : Promise.reject(tableError(404));
+    if (!entity) throw tableError(404);
+    return { ...entity };
   }
 
-  public deleteEntity(
+  public async deleteEntity(
     partitionKey: string,
     rowKey: string,
     options: { readonly etag?: string },
   ): Promise<void> {
+    await this.beforeDelete?.(partitionKey, rowKey);
     const key = this.key(partitionKey, rowKey);
     const existing = this.entities.get(key);
-    if (!existing) return Promise.reject(tableError(404));
-    if (options.etag !== existing.etag) return Promise.reject(tableError(412));
+    if (!existing) throw tableError(404);
+    if (options.etag !== existing.etag) throw tableError(412);
     this.entities.delete(key);
-    return Promise.resolve();
   }
 }
 
@@ -152,15 +158,20 @@ const loadStore = async () => {
     },
   }));
   const { AzureTableDeploymentRecordStore } = await import('../../src/deployments/store-azure.js');
-  const create = () =>
-    new AzureTableDeploymentRecordStore(credential, {
-      accountUrl: 'https://example.invalid',
-      recordsTable: 'records',
-      locksTable: 'locks',
-      lockTtlMs: 900_000,
-      requestTimeoutMs: 30_000,
-    });
-  return { create, tables };
+  const logger = { warn: vi.fn() };
+  const create = (overrides: { readonly lockTtlMs?: number } = {}) =>
+    new AzureTableDeploymentRecordStore(
+      credential,
+      {
+        accountUrl: 'https://example.invalid',
+        recordsTable: 'records',
+        locksTable: 'locks',
+        lockTtlMs: overrides.lockTtlMs ?? 900_000,
+        requestTimeoutMs: 30_000,
+      },
+      logger,
+    );
+  return { create, tables, logger };
 };
 
 afterEach(() => {
@@ -169,6 +180,174 @@ afterEach(() => {
 });
 
 describe('AzureTableDeploymentRecordStore concurrency', () => {
+  it.each([401, 429])(
+    'replaces a Table %i renewal failure with a status-free lease marker',
+    async (statusCode) => {
+      const { create, tables } = await loadStore();
+      const store = create({ lockTtlMs: 30 });
+      const locks = tables.get('locks');
+      if (!locks) throw new Error('lock table was not created');
+      locks.beforeUpdate = () => Promise.reject(tableError(statusCode));
+
+      const reason = await store.withScopeLock(
+        'scope',
+        (signal) =>
+          new Promise<unknown>((resolve) => {
+            if (signal.aborted) resolve(signal.reason);
+            else signal.addEventListener('abort', () => resolve(signal.reason), { once: true });
+          }),
+      );
+
+      expect(reason).toMatchObject({
+        name: 'DeploymentLeaseLostError',
+        code: 'LEASE_LOST',
+        cause: { statusCode },
+      });
+      expect(reason).not.toHaveProperty('statusCode');
+    },
+  );
+
+  it('renews and releases an ordinary lease without changing the protected result', async () => {
+    const { create, tables } = await loadStore();
+    const store = create({ lockTtlMs: 30 });
+    const locks = tables.get('locks');
+    if (!locks) throw new Error('lock table was not created');
+    let markRenewed = (): void => undefined;
+    const renewed = new Promise<void>((resolve) => {
+      markRenewed = resolve;
+    });
+    locks.beforeUpdate = () => {
+      markRenewed();
+      return Promise.resolve();
+    };
+
+    await expect(
+      store.withScopeLock('scope', async () => {
+        await renewed;
+        return 'accepted';
+      }),
+    ).resolves.toBe('accepted');
+    expect(locks.entities.size).toBe(0);
+  });
+
+  it('preserves success and leaves TTL reclamation available when release lookup fails', async () => {
+    const { create, tables, logger } = await loadStore();
+    const store = create();
+    const locks = tables.get('locks');
+    if (!locks) throw new Error('lock table was not created');
+
+    await expect(
+      store.withScopeLock('scope', () => {
+        locks.beforeGet = () => Promise.reject(tableError(503));
+        return Promise.resolve('accepted');
+      }),
+    ).resolves.toBe('accepted');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'deployment.lock.release.failed', scopeKey: 'scope' }),
+      expect.any(String),
+    );
+    expect(locks.entities.size).toBe(1);
+
+    locks.beforeGet = undefined;
+    const held = [...locks.entities.values()][0];
+    if (!held) throw new Error('scope lock was not retained');
+    held.expiresAt = '2000-01-01T00:00:00.000Z';
+    await expect(create().withScopeLock('scope', () => Promise.resolve('reclaimed'))).resolves.toBe(
+      'reclaimed',
+    );
+    expect(locks.entities.size).toBe(0);
+  });
+
+  it('preserves success when conditional release deletion fails', async () => {
+    const { create, tables, logger } = await loadStore();
+    const store = create();
+    const locks = tables.get('locks');
+    if (!locks) throw new Error('lock table was not created');
+
+    await expect(
+      store.withScopeLock('scope', () => {
+        locks.beforeDelete = () => Promise.reject(tableError(503));
+        return Promise.resolve('accepted');
+      }),
+    ).resolves.toBe('accepted');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'deployment.lock.release.failed', scopeKey: 'scope' }),
+      expect.any(String),
+    );
+    expect(locks.entities.size).toBe(1);
+  });
+
+  it('preserves the protected error when release also fails', async () => {
+    const { create, tables, logger } = await loadStore();
+    const store = create();
+    const locks = tables.get('locks');
+    if (!locks) throw new Error('lock table was not created');
+    const operationError = new Error('ARM submission failed');
+
+    const protectedOperation = store.withScopeLock('scope', () => {
+      locks.beforeGet = () => Promise.reject(tableError(503));
+      return Promise.reject(operationError);
+    });
+
+    await expect(protectedOperation).rejects.toBe(operationError);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'deployment.lock.release.failed', scopeKey: 'scope' }),
+      expect.any(String),
+    );
+  });
+
+  it('preserves success when reporting the release failure also throws', async () => {
+    const { create, tables, logger } = await loadStore();
+    const store = create();
+    const locks = tables.get('locks');
+    if (!locks) throw new Error('lock table was not created');
+    const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    logger.warn.mockImplementation(() => {
+      throw new Error('logger failed');
+    });
+
+    await expect(
+      store.withScopeLock('scope', () => {
+        locks.beforeGet = () => Promise.reject(tableError(503));
+        return Promise.resolve('accepted');
+      }),
+    ).resolves.toBe('accepted');
+    expect(warning).toHaveBeenCalledWith(
+      'The distributed deployment lock release and its logger both failed.',
+      { code: 'AZURE_LOCK_RELEASE_LOG_FAILURE' },
+    );
+    warning.mockRestore();
+  });
+
+  it('releases a committed acquisition when caller cancellation wins before admission', async () => {
+    const { create, tables } = await loadStore();
+    const store = create();
+    const locks = tables.get('locks');
+    if (!locks) throw new Error('lock table was not created');
+    let markCreated = (): void => undefined;
+    const created = new Promise<void>((resolve) => {
+      markCreated = resolve;
+    });
+    let finishCreate = (): void => undefined;
+    locks.afterCreate = async () => {
+      markCreated();
+      await new Promise<void>((resolve) => {
+        finishCreate = resolve;
+      });
+    };
+    const cancellation = new AbortController();
+    const run = vi.fn(() => Promise.resolve());
+
+    const acquiring = store.withScopeLock('scope', run, cancellation.signal);
+    await created;
+    cancellation.abort();
+    finishCreate();
+
+    await expect(acquiring).rejects.toMatchObject({ code: 'timeout' });
+    expect(run).not.toHaveBeenCalled();
+    expect(locks.entities.size).toBe(0);
+  });
+
   it('does not let an expired holder delete a newer owner lock', async () => {
     const { create, tables } = await loadStore();
     const firstStore = create();

@@ -49,7 +49,7 @@ export const createServices = (
       maxConcurrency: config.bicep.maxConcurrency,
       modulePolicy: config.bicep.modulePolicy,
     });
-  const store = options.store ?? createDeploymentRecordStore(config);
+  const store = options.store ?? createDeploymentRecordStore(config, logger);
 
   return {
     guardrails,

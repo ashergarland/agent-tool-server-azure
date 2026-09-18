@@ -49,14 +49,24 @@ const config = loadConfig({
   DEPLOYMENT_POLL_INTERVAL_MS: '2000',
 });
 
+const storeLogger = {
+  warn(context: Record<string, unknown>, message: string): void {
+    console.warn(message, context);
+  },
+};
+
 // The real Azure Table store, against a real storage account with shared keys disabled.
-const store = new AzureTableDeploymentRecordStore(createAzureCredentials(config).deployment, {
-  accountUrl: tableEndpoint,
-  recordsTable: config.deployments.store.recordsTable,
-  locksTable: config.deployments.store.locksTable,
-  lockTtlMs: config.deployments.store.lockTtlMs,
-  requestTimeoutMs: config.azure.armRequestTimeoutMs,
-});
+const store = new AzureTableDeploymentRecordStore(
+  createAzureCredentials(config).deployment,
+  {
+    accountUrl: tableEndpoint,
+    recordsTable: config.deployments.store.recordsTable,
+    locksTable: config.deployments.store.locksTable,
+    lockTtlMs: config.deployments.store.lockTtlMs,
+    requestTimeoutMs: config.azure.armRequestTimeoutMs,
+  },
+  storeLogger,
+);
 
 const app = await createApplication({ config, store });
 const { services, registry } = app;
