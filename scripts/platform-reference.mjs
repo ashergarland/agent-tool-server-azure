@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-export const PLATFORM_REVISION = '98ec8162fb11d5c04aee9e6f7b3625a472a0180d';
+export const PLATFORM_REVISION = 'c9b8375c53ee8720db6f2d97585415f103d93911';
 
 const commandOutput = (command, args) => {
   const result = spawnSync(command, args, {

@@ -21,11 +21,11 @@ env:
 
 jobs:
   # Agent Tool Platform workflow pin:
-  # 98ec8162fb11d5c04aee9e6f7b3625a472a0180d
+  # c9b8375c53ee8720db6f2d97585415f103d93911
   capability:
     permissions:
       contents: read
-    uses: ashergarland/agent-tool-platform/.github/workflows/capability-ci.yml@98ec8162fb11d5c04aee9e6f7b3625a472a0180d
+    uses: ashergarland/agent-tool-platform/.github/workflows/capability-ci.yml@c9b8375c53ee8720db6f2d97585415f103d93911
     with:
       node_version: '22'
       openapi_path: openapi.json
@@ -42,7 +42,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: ashergarland/agent-tool-platform
-          ref: 98ec8162fb11d5c04aee9e6f7b3625a472a0180d
+          ref: c9b8375c53ee8720db6f2d97585415f103d93911
           path: .agent-tool-platform
 
       - uses: actions/setup-node@v7

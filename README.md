@@ -351,6 +351,12 @@ checked-in `Dockerfile` build recipe; the
 operator-selected source revision, built image digest, subscriptions, tenants, resource identities,
 endpoints, secret values, and live desired state remain in private operator state.
 
+The profiles declare the capability-side `connector-api-key` secret requirement only. The hosted
+Azure server authenticates `x-api-key`; Platform's first-party Capability Registry 0.3.0 owns the
+`connector-api-key` to `x-api-key` client binding, and Agent Kit 0.3.0 turns that Registry metadata
+into host configuration. No client-header mapping is implemented in this server or its capability
+profiles.
+
 ## Configuration
 
 All configuration is environment based and validated at startup; see [`.env.example`](.env.example)
@@ -406,7 +412,8 @@ touches no Azure account and requires no cloud credentials. The checked-in Level
 the real `azure_get_resource` tool through an injected read-only provider and proves revision,
 replica, ingress, listener, readiness, image-pull, and degraded-state facts without a live request.
 
-Deployment-contract validation uses the exact Platform revision named in
+The Azure 0.3.0 source baseline consumes exact Runtime and Testkit 0.3.0 packages.
+Deployment-contract validation uses the exact Platform 0.3.0 revision named in
 [`scripts/platform-reference.mjs`](scripts/platform-reference.mjs). Build that checkout and set
 `AGENT_TOOL_PLATFORM_CHECKOUT` before running `npm run deployment:validate` and
 `npm run deployment:conformance`.

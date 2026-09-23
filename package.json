@@ -1,6 +1,6 @@
 {
   "name": "agent-tool-server-azure",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Guard-railed Azure control plane for agents over HTTP/OpenAPI, stdio MCP and remote MCP.",
   "license": "MIT",
   "type": "module",
@@ -46,7 +46,7 @@
     "url": "https://github.com/ashergarland/agent-tool-server-azure/issues"
   },
   "dependencies": {
-    "@agent-tool-platform/runtime": "0.1.3",
+    "@agent-tool-platform/runtime": "0.3.0",
     "@azure/arm-appservice": "^19.0.0",
     "@azure/arm-compute": "^25.0.0",
     "@azure/arm-resourcegraph": "^5.0.0",
@@ -58,7 +58,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@agent-tool-platform/testkit": "0.1.3",
+    "@agent-tool-platform/testkit": "0.3.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@types/node": "^22.20.1",
     "@vitest/coverage-v8": "^4.1.10",
