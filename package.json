@@ -24,6 +24,7 @@
     "openapi:emit": "tsx scripts/emit-openapi.ts",
     "openapi:check": "tsx scripts/check-openapi.ts",
     "metadata:validate": "agent-tool-validate-metadata --server server.json --package package.json",
+    "release:validate": "node --test tests/release-integrity.test.mjs",
     "deployment:validate": "node scripts/validate-deployment-contract.mjs",
     "deployment:conformance": "node scripts/run-deployment-conformance.mjs",
     "verify:live": "tsx scripts/live-verify.ts",
