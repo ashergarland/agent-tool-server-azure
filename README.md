@@ -29,6 +29,7 @@ from Agent Tool Platform; this repository owns only the Azure capability and its
 - [Bicep deployment tools](#bicep-deployment-tools)
 - [D4 capability profiles](#d4-capability-profiles)
 - [Configuration](#configuration)
+- [Public capability releases](#public-capability-releases)
 - [Deploying to Azure](#deploying-to-azure)
 - [Contributing and security](#contributing-and-security)
 
@@ -454,13 +455,34 @@ docker run --rm --entrypoint cat agent-tool-server-azure /usr/local/share/bicep.
 
 ---
 
+## Public capability releases
+
+Public capability distribution is tag-authoritative and separate from Azure deployment. A stable
+source tag such as `v0.3.0` must agree with `package.json`, `server.json`, and `.env.example`. After
+the exact tagged commit has passed main CI, the release workflow builds the existing Dockerfile with
+that full Git SHA and version, publishes:
+
+- `ghcr.io/ashergarland/agent-tool-server-azure:0.3.0`;
+- `ghcr.io/ashergarland/agent-tool-server-azure:v0.3.0`; and
+- an immutable `sha-<12 hex>` source tag.
+
+All tags must resolve to one manifest digest. The workflow verifies anonymous pull, records standard
+GitHub build provenance, and creates the GitHub Release only after OCI verification succeeds. It
+never publishes `latest` and never requires Azure access or a long-lived registry credential.
+
+See the **[public capability release guide](docs/releasing.md)** for the authority, tag policy,
+first-package GHCR visibility prerequisite, verification order, and normal release sequence.
+
+---
+
 ## Deploying to Azure
 
-Infrastructure lives in `infra/` (Bicep, subscription-scoped). This public repository owns the
-reusable template and deployment mechanics, not an operator's desired state. Both provisioning and
-release require an explicit path to an operator-owned, non-secret parameter file outside the public
-repository. Passing that same file on every deployment stops an image-only release from resetting
-settings to template defaults.
+This is the **operator Azure deployment** path, not public capability publication. Infrastructure
+lives in `infra/` (Bicep, subscription-scoped). This public repository owns the reusable template and
+deployment mechanics, not an operator's desired state. Both provisioning and deployment require an
+explicit path to an operator-owned, non-secret parameter file outside the public repository. Passing
+that same file on every deployment stops an image-only operator release from resetting settings to
+template defaults.
 
 `infra/parameters/nonlive.example.parameters.json` is an intentionally non-live, scope-empty example,
 not a deployment environment. Copy its shape into private desired state and replace it there; do not

@@ -4,6 +4,12 @@ This guide covers the repository's Azure Container Apps deployment. Read the
 [safety model](../README.md#safety-model) and the [threat model](threat-model.md) before granting
 the server access to real resources.
 
+> [!IMPORTANT]
+> This is the **operator Azure deployment** path. It builds in an operator-owned ACR from explicit
+> private desired state and deploys an Azure Container App. It does not publish the public GHCR
+> capability. The separate tag-authoritative distribution path is documented in the
+> [public capability release guide](releasing.md).
+
 ## Contents
 
 - [What gets deployed](#what-gets-deployed)
@@ -160,7 +166,11 @@ with any client.
 ./scripts/bootstrap/deploy.sh <subscription-id> <parameter-file> <region>
 ```
 
-The release:
+This is an operator-environment image release, not publication of
+`ghcr.io/ashergarland/agent-tool-server-azure`. It remains intentionally separate from the public
+capability release workflow.
+
+The operator release:
 
 - warns if the working tree is dirty, because the recorded git SHA would then describe nothing;
 - builds in ACR with an immutable tag derived from the commit (`sha-<12 hex>`);

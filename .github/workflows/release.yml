@@ -1,0 +1,640 @@
+name: Public OCI release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-oci-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/ashergarland/agent-tool-server-azure
+  NODE_VERSION: '22'
+  REGISTRY: ghcr.io
+
+jobs:
+  validate:
+    name: Validate tagged source
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read # Query the full CI result for the exact tagged commit.
+      contents: read
+    outputs:
+      ci_run_url: ${{ steps.ci.outputs.ci_run_url }}
+      git_sha: ${{ steps.contract.outputs.git_sha }}
+      source_tag: ${{ steps.contract.outputs.source_tag }}
+      version: ${{ steps.contract.outputs.version }}
+    steps:
+      - name: Check out the exact tag target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Validate tag, versions, and source identity
+        id: contract
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REPOSITORY" != 'ashergarland/agent-tool-server-azure' ]]; then
+            echo "::error::This workflow may publish only from ashergarland/agent-tool-server-azure."
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" != 'tag' || "$GITHUB_REF" != "refs/tags/$RELEASE_TAG" ]]; then
+            echo "::error::The release source is not the expected tag ref."
+            exit 1
+          fi
+
+          version="$(node scripts/validate-release.mjs "$RELEASE_TAG")"
+          git_sha="$(git rev-parse HEAD)"
+          event_sha="$(git rev-parse --verify "${GITHUB_SHA}^{commit}")"
+          tag_sha="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
+
+          if [[ ! "$git_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The checked-out source did not resolve to a full Git commit SHA."
+            exit 1
+          fi
+          if [[ "$git_sha" != "$event_sha" ]]; then
+            echo "::error::The checkout and event SHA do not identify one commit."
+            exit 1
+          fi
+          if [[ "$git_sha" != "$tag_sha" ]]; then
+            echo "::error::The checkout and tag target do not identify one commit."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$git_sha" origin/main; then
+            echo "::error::The tagged commit is not integrated into origin/main."
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "::error::The tagged source checkout is not clean."
+            git status --short
+            exit 1
+          fi
+
+          {
+            echo "git_sha=$git_sha"
+            echo "source_tag=sha-${git_sha:0:12}"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Validate generated API and server metadata
+        run: |
+          npm run openapi:emit -- "$RUNNER_TEMP/openapi.json"
+          npm run openapi:check -- "$RUNNER_TEMP/openapi.json"
+          npm run metadata:validate
+
+      - name: Require successful main CI for the exact commit
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_SHA: ${{ steps.contract.outputs.git_sha }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_error="$(mktemp)"
+          if gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "/repos/ashergarland/agent-tool-server-azure/releases/tags/${RELEASE_TAG}" \
+            > /dev/null 2> "$release_error"; then
+            echo "::error::GitHub Release $RELEASE_TAG already exists; refusing to republish it."
+            rm -f "$release_error"
+            exit 1
+          fi
+          if ! grep -Fq 'HTTP 404' "$release_error"; then
+            cat "$release_error" >&2
+            rm -f "$release_error"
+            exit 1
+          fi
+          rm -f "$release_error"
+
+          response="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "/repos/ashergarland/agent-tool-server-azure/actions/workflows/ci.yml/runs?head_sha=${GIT_SHA}&event=push&status=completed&per_page=100"
+          )"
+          run="$(
+            jq -cer --arg sha "$GIT_SHA" '
+              [
+                .workflow_runs[]
+                | select(
+                    .head_sha == $sha
+                    and .head_branch == "main"
+                    and .event == "push"
+                    and .status == "completed"
+                    and .conclusion == "success"
+                  )
+              ]
+              | sort_by(.run_number)
+              | last // empty
+            ' <<< "$response"
+          )" || {
+            echo "::error::No successful completed main CI run exists for $GIT_SHA."
+            exit 1
+          }
+
+          ci_run_url="$(jq -r '.html_url' <<< "$run")"
+          echo "ci_run_url=$ci_run_url" >> "$GITHUB_OUTPUT"
+          echo "Exact-source CI: $ci_run_url"
+
+  publish:
+    name: Publish and verify public OCI release
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      artifact-metadata: write # Record the attested OCI artifact.
+      attestations: write # Persist GitHub build provenance.
+      contents: read
+      id-token: write # Mint the short-lived Sigstore identity.
+      packages: write # Publish the image and registry attestation.
+    outputs:
+      digest: ${{ steps.existing.outputs.digest || steps.source.outputs.digest }}
+    steps:
+      - name: Check out the validated source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.validate.outputs.git_sha }}
+
+      - name: Verify the release tag still identifies the validated source
+        env:
+          GIT_SHA: ${{ needs.validate.outputs.git_sha }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag_sha="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
+          if [[ "$tag_sha" != "$GIT_SHA" ]]; then
+            echo "::error::The release tag moved after source validation."
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the release candidate image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          build-args: |
+            GIT_SHA=${{ needs.validate.outputs.git_sha }}
+            SERVICE_VERSION=${{ needs.validate.outputs.version }}
+          context: .
+          load: true
+          provenance: false
+          push: false
+          tags: agent-tool-server-azure:release-candidate
+
+      - name: Verify image identity and non-root runtime
+        env:
+          GIT_SHA: ${{ needs.validate.outputs.git_sha }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          revision="$(
+            docker image inspect \
+              --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+              agent-tool-server-azure:release-candidate
+          )"
+          image_version="$(
+            docker image inspect \
+              --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' \
+              agent-tool-server-azure:release-candidate
+          )"
+          source="$(
+            docker image inspect \
+              --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' \
+              agent-tool-server-azure:release-candidate
+          )"
+          uid="$(docker run --rm --entrypoint id agent-tool-server-azure:release-candidate -u)"
+
+          [[ "$revision" == "$GIT_SHA" ]]
+          [[ "$image_version" == "$VERSION" ]]
+          [[ "$source" == 'https://github.com/ashergarland/agent-tool-server-azure' ]]
+          [[ "$uid" != '0' ]]
+          docker image inspect --format '{{ range .Config.Env }}{{ println . }}{{ end }}' \
+            agent-tool-server-azure:release-candidate | grep -Fx "GIT_SHA=$GIT_SHA"
+          docker image inspect --format '{{ range .Config.Env }}{{ println . }}{{ end }}' \
+            agent-tool-server-azure:release-candidate | grep -Fx "SERVICE_VERSION=$VERSION"
+
+      - name: Verify the stdio MCP entry point
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          printf '%s\n%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"release","version":"1"}}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+            | docker run --rm -i \
+                -e NODE_ENV=development -e AUTH_MODE=disabled -e LOG_LEVEL=silent \
+                --entrypoint node agent-tool-server-azure:release-candidate dist/stdio.js \
+            | tee "$RUNNER_TEMP/release-mcp.jsonl"
+          grep -q 'azure_list_subscriptions' "$RUNNER_TEMP/release-mcp.jsonl"
+          grep -q 'azure_validate_bicep' "$RUNNER_TEMP/release-mcp.jsonl"
+
+      - name: Verify HTTP and protected surfaces
+        env:
+          GIT_SHA: ${{ needs.validate.outputs.git_sha }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          api_key="$(openssl rand -hex 32)"
+          container_name="azure-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if docker container inspect "$container_name" > /dev/null 2>&1; then
+              if [[ "$status" -ne 0 ]]; then
+                docker logs "$container_name" >&2 || true
+              fi
+              docker rm -f "$container_name" > /dev/null || true
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          docker run -d --name "$container_name" -p 127.0.0.1:8080:8080 \
+            -e API_KEYS="$api_key" \
+            agent-tool-server-azure:release-candidate
+
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          curl -fsS http://127.0.0.1:8080/health
+          version_body="$(curl -fsS http://127.0.0.1:8080/version)"
+          jq -e --arg sha "$GIT_SHA" --arg version "$VERSION" \
+            '.gitSha == $sha and .version == $version' <<< "$version_body"
+          curl -fsS -H "x-api-key: $api_key" http://127.0.0.1:8080/tools > /dev/null
+          [[ "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/tools)" == '401' ]]
+          [[ "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/mcp)" == '401' ]]
+          [[ "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/metrics)" == '401' ]]
+
+          docker logs "$container_name" 2>&1 | tee "$RUNNER_TEMP/release-server.log"
+          if grep -Fq "$api_key" "$RUNNER_TEMP/release-server.log"; then
+            echo "::error::The HTTP authentication key appeared in container logs."
+            exit 1
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+
+      - name: Protect existing release tags
+        id: existing
+        env:
+          SOURCE_TAG: ${{ needs.validate.outputs.source_tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          resolve_digest() {
+            local ref="$1"
+            local error_file
+            error_file="$(mktemp)"
+            if docker buildx imagetools inspect "$ref" \
+              --format '{{ .Manifest.Digest }}' 2> "$error_file"; then
+              rm -f "$error_file"
+              return 0
+            fi
+            if grep -Eqi 'manifest unknown|not found' "$error_file"; then
+              rm -f "$error_file"
+              return 2
+            fi
+            if grep -Eqi '403 Forbidden|requested access.*denied' "$error_file"; then
+              rm -f "$error_file"
+              return 3
+            fi
+            cat "$error_file" >&2
+            rm -f "$error_file"
+            return 1
+          }
+
+          common_digest=''
+          denied_count=0
+          existing_count=0
+          for tag in "$VERSION" "v$VERSION" "$SOURCE_TAG"; do
+            ref="$IMAGE_NAME:$tag"
+            if digest="$(resolve_digest "$ref")"; then
+              echo "Found existing $ref at $digest"
+              if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "::error::GHCR returned an invalid manifest digest for $ref: $digest"
+                exit 1
+              fi
+              if [[ -n "$common_digest" && "$digest" != "$common_digest" ]]; then
+                echo "::error::Existing release tags resolve to different manifest digests."
+                exit 1
+              fi
+              common_digest="$digest"
+              existing_count=$((existing_count + 1))
+            else
+              status=$?
+              case "$status" in
+                2)
+                  echo "Confirmed absent: $ref"
+                  ;;
+                3)
+                  echo "GHCR denied the pre-publication lookup for $ref."
+                  denied_count=$((denied_count + 1))
+                  ;;
+                *)
+                  exit "$status"
+                  ;;
+              esac
+            fi
+          done
+
+          if [[ "$denied_count" -ne 0 && "$denied_count" -ne 3 ]]; then
+            echo "::error::GHCR returned an ambiguous mix of denied and resolved tag lookups."
+            exit 1
+          fi
+          if [[ "$denied_count" -eq 3 && "$existing_count" -ne 0 ]]; then
+            echo "::error::GHCR returned existing tags together with denied tag lookups."
+            exit 1
+          fi
+          if [[ "$denied_count" -eq 3 ]]; then
+            echo "No GHCR package is visible to the repository token; attempting first publication."
+          fi
+
+          echo "digest=$common_digest" >> "$GITHUB_OUTPUT"
+          echo "existing_count=$existing_count" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the immutable source tag
+        id: source
+        if: steps.existing.outputs.existing_count == '0'
+        env:
+          SOURCE_TAG: ${{ needs.validate.outputs.source_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ref="$IMAGE_NAME:$SOURCE_TAG"
+          docker tag agent-tool-server-azure:release-candidate "$ref"
+          docker push "$ref"
+          digest="$(
+            docker buildx imagetools inspect "$ref" --format '{{ .Manifest.Digest }}'
+          )"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::GHCR returned an invalid manifest digest: $digest"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Published $ref at $digest"
+
+      - name: Verify published image identity
+        env:
+          DIGEST: ${{ steps.existing.outputs.digest || steps.source.outputs.digest }}
+          GIT_SHA: ${{ needs.validate.outputs.git_sha }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker pull "$IMAGE_NAME@$DIGEST"
+          revision="$(
+            docker image inspect \
+              --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+              "$IMAGE_NAME@$DIGEST"
+          )"
+          image_version="$(
+            docker image inspect \
+              --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' \
+              "$IMAGE_NAME@$DIGEST"
+          )"
+          source="$(
+            docker image inspect \
+              --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' \
+              "$IMAGE_NAME@$DIGEST"
+          )"
+
+          [[ "$revision" == "$GIT_SHA" ]]
+          [[ "$image_version" == "$VERSION" ]]
+          [[ "$source" == 'https://github.com/ashergarland/agent-tool-server-azure' ]]
+          docker image inspect --format '{{ range .Config.Env }}{{ println . }}{{ end }}' \
+            "$IMAGE_NAME@$DIGEST" | grep -Fx "GIT_SHA=$GIT_SHA"
+          docker image inspect --format '{{ range .Config.Env }}{{ println . }}{{ end }}' \
+            "$IMAGE_NAME@$DIGEST" | grep -Fx "SERVICE_VERSION=$VERSION"
+
+      - name: Require anonymous public pull
+        env:
+          DIGEST: ${{ steps.existing.outputs.digest || steps.source.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          anonymous_config="$(mktemp -d)"
+          trap 'rm -rf "$anonymous_config"' EXIT
+          public_digest="$(
+            DOCKER_CONFIG="$anonymous_config" docker buildx imagetools inspect \
+              "$IMAGE_NAME@$DIGEST" \
+              --format '{{ .Manifest.Digest }}'
+          )"
+          [[ "$public_digest" == "$DIGEST" ]]
+          DOCKER_CONFIG="$anonymous_config" docker pull "$IMAGE_NAME@$DIGEST"
+
+      - name: Publish and verify version aliases
+        env:
+          DIGEST: ${{ steps.existing.outputs.digest || steps.source.outputs.digest }}
+          SOURCE_TAG: ${{ needs.validate.outputs.source_tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          resolve_digest() {
+            local ref="$1"
+            local error_file
+            error_file="$(mktemp)"
+            if docker buildx imagetools inspect "$ref" \
+              --format '{{ .Manifest.Digest }}' 2> "$error_file"; then
+              rm -f "$error_file"
+              return 0
+            fi
+            if grep -Eqi 'manifest unknown|not found' "$error_file"; then
+              rm -f "$error_file"
+              return 2
+            fi
+            cat "$error_file" >&2
+            rm -f "$error_file"
+            return 1
+          }
+
+          for tag in "$SOURCE_TAG" "$VERSION" "v$VERSION"; do
+            ref="$IMAGE_NAME:$tag"
+            if observed="$(resolve_digest "$ref")"; then
+              if [[ ! "$observed" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "::error::GHCR returned an invalid manifest digest for $ref: $observed"
+                exit 1
+              fi
+              if [[ "$observed" != "$DIGEST" ]]; then
+                echo "::error::$ref already resolves to $observed, not $DIGEST."
+                exit 1
+              fi
+            else
+              status=$?
+              if [[ "$status" -ne 2 ]]; then
+                exit "$status"
+              fi
+              docker buildx imagetools create \
+                --prefer-index=false \
+                --tag "$ref" \
+                "$IMAGE_NAME@$DIGEST"
+            fi
+
+            observed="$(resolve_digest "$ref")"
+            if [[ "$observed" != "$DIGEST" ]]; then
+              echo "::error::$ref resolves to $observed after publication, not $DIGEST."
+              exit 1
+            fi
+            echo "Verified $ref at $observed"
+          done
+
+      - name: Re-verify anonymous version pull
+        env:
+          DIGEST: ${{ steps.existing.outputs.digest || steps.source.outputs.digest }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          anonymous_config="$(mktemp -d)"
+          trap 'rm -rf "$anonymous_config"' EXIT
+          version_digest="$(
+            DOCKER_CONFIG="$anonymous_config" docker buildx imagetools inspect \
+              "$IMAGE_NAME:$VERSION" \
+              --format '{{ .Manifest.Digest }}'
+          )"
+          [[ "$version_digest" == "$DIGEST" ]]
+          DOCKER_CONFIG="$anonymous_config" docker pull "$IMAGE_NAME:$VERSION"
+
+      - name: Attest published image provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          push-to-registry: true
+          subject-digest: ${{ steps.existing.outputs.digest || steps.source.outputs.digest }}
+          subject-name: ${{ env.IMAGE_NAME }}
+
+  release:
+    name: Create GitHub Release
+    needs: [validate, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Create the GitHub Release after OCI verification.
+    steps:
+      - name: Check out the released source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.validate.outputs.git_sha }}
+
+      - name: Verify the release tag still identifies the published source
+        env:
+          GIT_SHA: ${{ needs.validate.outputs.git_sha }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag_sha="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
+          if [[ "$tag_sha" != "$GIT_SHA" ]]; then
+            echo "::error::The release tag moved after OCI publication."
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        env:
+          CI_RUN_URL: ${{ needs.validate.outputs.ci_run_url }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+          GIT_SHA: ${{ needs.validate.outputs.git_sha }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_TAG: ${{ needs.validate.outputs.source_tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::The publish job did not return a valid manifest digest."
+            exit 1
+          fi
+
+          release_error="$(mktemp)"
+          if gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "/repos/ashergarland/agent-tool-server-azure/releases/tags/${RELEASE_TAG}" \
+            > /dev/null 2> "$release_error"; then
+            echo "::error::GitHub Release $RELEASE_TAG already exists; refusing to replace it."
+            rm -f "$release_error"
+            exit 1
+          fi
+          if ! grep -Fq 'HTTP 404' "$release_error"; then
+            cat "$release_error" >&2
+            rm -f "$release_error"
+            exit 1
+          fi
+          rm -f "$release_error"
+
+          notes="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes" <<EOF
+          Public Azure capability release.
+
+          - Version: \`$VERSION\`
+          - Source commit: \`$GIT_SHA\`
+          - OCI artifact: \`$IMAGE_NAME:$VERSION\`
+          - Immutable source tag: \`$IMAGE_NAME:$SOURCE_TAG\`
+          - Manifest digest: \`$DIGEST\`
+          - Exact-source CI: $CI_RUN_URL
+          EOF
+
+          gh release create "$RELEASE_TAG" \
+            --repo ashergarland/agent-tool-server-azure \
+            --verify-tag \
+            --target "$GIT_SHA" \
+            --title "Azure capability $VERSION" \
+            --notes-file "$notes"
+
+          {
+            echo "## Public OCI release"
+            echo
+            echo "- Version: \`$VERSION\`"
+            echo "- Source: \`$GIT_SHA\`"
+            echo "- OCI: \`$IMAGE_NAME:$VERSION\`"
+            echo "- Digest: \`$DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"
