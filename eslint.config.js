@@ -12,7 +12,7 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: {
         projectService: {
-          allowDefaultProject: ['eslint.config.js'],
+          allowDefaultProject: ['eslint.config.js', 'tests/*.mjs'],
         },
         tsconfigRootDir: import.meta.dirname,
       },
@@ -28,13 +28,19 @@ export default tseslint.config(
     },
   },
   {
-    files: ['tests/**/*.ts', 'scripts/**/*.ts'],
+    files: ['tests/**/*.{ts,mjs}', 'scripts/**/*.ts'],
     rules: {
       '@typescript-eslint/no-unsafe-assignment': 'off',
       '@typescript-eslint/no-unsafe-member-access': 'off',
       '@typescript-eslint/no-unsafe-argument': 'off',
       '@typescript-eslint/no-unsafe-call': 'off',
       'no-console': 'off',
+    },
+  },
+  {
+    files: ['tests/**/*.mjs'],
+    rules: {
+      '@typescript-eslint/no-floating-promises': 'off',
     },
   },
   prettier,

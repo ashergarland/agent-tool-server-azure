@@ -45,10 +45,17 @@ One build publishes three tags that must resolve to one manifest digest:
 | `v0.3.0`                 | Alias matching the authoritative source tag.  |
 | `sha-<first 12 Git hex>` | Source-commit identity and safe retry anchor. |
 
-`latest` is deliberately not published. The workflow refuses to replace an existing tag with a
-different digest and serializes attempts for the same Git ref without canceling a release already in
-progress. Consumers that require immutability should use the verified `sha256:` manifest digest
-recorded in the GitHub Release.
+`latest` is deliberately not published. Every release run first pushes a fresh exact-source build
+under a run-unique `release-validation-<run>-<attempt>` tag and resolves its registry manifest
+digest. That validation tag is retained because safe GHCR cleanup would require broader package
+deletion machinery; it is never a release alias, metadata reference, or input to normal tag
+discovery.
+
+Existing source or version tags are reusable only when their registry manifest digest equals that
+fresh-build digest. A conflicting tag fails the release even if its image labels claim the expected
+source and version. The workflow serializes attempts for the same Git ref without canceling a
+release already in progress. Consumers that require immutability should use the verified `sha256:`
+manifest digest recorded in the GitHub Release.
 
 The Docker build receives the full tagged commit as `GIT_SHA` and the validated source version as
 `SERVICE_VERSION`. Before publication, the exact release image is checked for those labels and
@@ -64,8 +71,9 @@ After the release implementation has been reviewed and integrated:
 3. The [Public OCI release workflow](../.github/workflows/release.yml) validates source metadata and
    exact-source CI, builds the existing `Dockerfile`, and authenticates to GHCR with the repository's
    short-lived `GITHUB_TOKEN`.
-4. The workflow publishes or safely resumes the immutable source tag, verifies the image identity,
-   and requires an anonymous digest pull.
+4. The workflow obtains the registry digest of a fresh run-unique validation build, rejects any
+   existing release tag at a different digest, publishes or safely resumes the immutable source tag,
+   verifies the image identity, and requires an anonymous digest pull.
 5. It publishes the version aliases, proves every tag resolves to the same digest, and repeats the
    anonymous pull through the canonical version tag.
 6. GitHub's short-lived OIDC identity creates and publishes a standard build-provenance attestation.
@@ -91,9 +99,10 @@ An owner with package admin access must then:
 2. under **Danger Zone**, choose **Change visibility** and set the package to **Public**; and
 3. re-run the failed release workflow.
 
-The retry verifies the existing source tag and embedded source identity without overwriting it,
-requires anonymous pull, and then completes the version aliases, attestation, and GitHub Release.
-Later releases inherit the package's public visibility and should complete in one run.
+The retry performs another fresh exact-source validation build and requires its registry digest to
+equal the existing source tag before continuing. It then requires anonymous pull and completes the
+version aliases, attestation, and GitHub Release. Later releases inherit the package's public
+visibility and should complete in one run.
 
 Do not bypass the anonymous check and do not add a long-lived package credential. Publication is not
 complete until both `ghcr.io/ashergarland/agent-tool-server-azure:<version>` and its digest are
